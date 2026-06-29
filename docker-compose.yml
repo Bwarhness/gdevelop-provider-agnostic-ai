@@ -1,0 +1,25 @@
+# Runs the provider-agnostic AI proxy in a container.
+# The GDevelop IDE itself runs on the host (cd GDevelop/newIDE/app && npm start) and
+# points at this proxy via newIDE/app/.env.local (REACT_APP_GENERATION_API_URL).
+#
+# Usage:
+#   PROVIDER_API_KEY=sk-... PROVIDER_BASE_URL=https://api.openai.com/v1 PROVIDER_MODEL=gpt-4o \
+#     docker compose up --build
+# Then configure/switch providers live at http://localhost:4000/
+services:
+  ai-proxy:
+    build: ./ai-proxy
+    ports:
+      - "4000:4000"
+    environment:
+      PORT: "4000"
+      HOST: "0.0.0.0"  # bind all interfaces inside the container so the mapped port is reachable
+      PROVIDER_BASE_URL: "${PROVIDER_BASE_URL:-https://api.openai.com/v1}"
+      PROVIDER_API_KEY: "${PROVIDER_API_KEY:-}"
+      PROVIDER_MODEL: "${PROVIDER_MODEL:-gpt-4o}"
+      PROVIDER_MAX_TOKENS: "${PROVIDER_MAX_TOKENS:-8192}"
+      PROVIDER_TEMPERATURE: "${PROVIDER_TEMPERATURE:-0.7}"
+    # For a host Ollama/vLLM, set PROVIDER_BASE_URL=http://host.docker.internal:11434/v1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

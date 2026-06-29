@@ -1,0 +1,1188 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "initialize_project",
+      "description": "Create the base GDevelop project. Must be called first before any other editing tool (it is one of only two tools that do not require an existing project). Creates a new project named 'project_name'. If 'template_slug' names a starter example, the project is initialized from that template; if it is empty/'none'/'empty', an empty project with a single scene is created. Optionally returns the events text of all existing scenes when 'also_read_existing_events' is true (useful right after creating from a template).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "project_name": {
+            "type": "string",
+            "description": "Name of the new project/game to create."
+          },
+          "template_slug": {
+            "type": "string",
+            "description": "Starter template/example slug to initialize from (e.g. 'starting-first-person-shooter'). Use '', 'none', or 'empty' to create an empty project with a single scene."
+          },
+          "also_read_existing_events": {
+            "type": "boolean",
+            "description": "If true, returns the events-as-text for every scene of the created project (helpful when initializing from a template to inspect its logic)."
+          }
+        },
+        "required": [
+          "project_name",
+          "template_slug"
+        ]
+      }
+    },
+    "_modifiesProject": true,
+    "_requiresProject": false,
+    "_notes": "project_name and template_slug both read via extractRequiredString (throw if missing) => required. also_read_existing_events via SafeExtractor.extractBooleanProperty => optional. template_slug values '', 'none', 'empty' (case-insensitive) map to an empty project. modifiesProject: true."
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_game_starter_summary",
+      "description": "Review/summarize a starter game template before planning. Handled entirely on the backend (the client launch is a no-op that returns a failure telling you it is backend-handled); used during planning to study a starter template named by 'template_slug'. One of the two tools that do not require an existing project.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "template_slug": {
+            "type": "string",
+            "description": "Slug of the starter template to summarize (e.g. 'starting-first-person-shooter')."
+          }
+        },
+        "required": []
+      }
+    },
+    "_modifiesProject": false,
+    "_requiresProject": false,
+    "_notes": "template_slug read via SafeExtractor.extractStringProperty (optional, only used for display/humanization). launchFunction is backend-only (returns generic failure 'handled on the backend'). modifiesProject: false. This is the only other tool besides initialize_project with _requiresProject false."
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "create_scene",
+      "description": "Create a new scene (layout) named 'scene_name'. If the scene already exists, it is left in place (optionally adding a 'UI' layer and/or marking it as the first scene). Optionally adds a top 'UI' layer, sets the scene background color, and marks it as the first (startup) scene.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scene_name": {
+            "type": "string",
+            "description": "Name of the scene to create (or ensure exists)."
+          },
+          "include_ui_layer": {
+            "type": "boolean",
+            "description": "If true, add a separate top 'UI' layer to the scene in addition to the base layer."
+          },
+          "background_color": {
+            "type": "string",
+            "description": "Background color as a hex string (e.g. '#aabbcc') or rgb; applied only when creating a new scene."
+          },
+          "is_first_scene": {
+            "type": "boolean",
+            "description": "If true, set this scene as the first (startup) scene of the game."
+          }
+        },
+        "required": [
+          "scene_name"
+        ]
+      }
+    },
+    "_modifiesProject": true,
+    "_requiresProject": true,
+    "_notes": "scene_name via extractRequiredString => required. include_ui_layer & is_first_scene via extractBooleanProperty (optional); background_color via extractStringProperty (optional, hex or rgb parsed by rgbOrHexToHexNumber). modifiesProject: true."
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "delete_scene",
+      "description": "Delete the scene named 'scene_name' from the project. If the scene does not exist, succeeds as a no-op.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scene_name": {
+            "type": "string",
+            "description": "Name of the scene to delete."
+          }
+        },
+        "required": [
+          "scene_name"
+        ]
+      }
+    },
+    "_modifiesProject": true,
+    "_requiresProject": true,
+    "_notes": "scene_name via extractRequiredString => required. Only argument. modifiesProject: true."
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "inspect_scene_properties_layers_effects",
+      "description": "Read a scene's settings: its properties (name, backgroundColor as hex, stopSoundsOnStartup, isFirstScene, plus project-level gameResolutionWidth/Height, gameOrientation, gameScaleMode, gameName), its ordered layers (name + position), and each layer's effects (effectName, effectType, and effect properties). Read-only. Returns a failure if the scene is not found.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scene_name": {
+            "type": "string",
+            "description": "Name of the scene to inspect."
+          }
+        },
+        "required": [
+          "scene_name"
+        ]
+      }
+    },
+    "_modifiesProject": false,
+    "_requiresProject": true,
+    "_notes": "scene_name via extractRequiredString => required. Only argument. modifiesProject: false (read-only inspector)."
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "change_scene_properties_layers_effects_groups",
+      "description": "Mutate a scene in one call: change scene/project properties, add/rename/move/delete layers, add/rename/move/delete layer effects (and set effect properties), and create/rename/delete object groups (and set their member objects). All values are passed as STRINGS in {property_name, new_value} items; property names are fuzzy-matched (case/space/underscore/dash-insensitive). Returns a failure if the scene is not found. Each of the four change arrays is optional; provide only the ones you need.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scene_name": {
+            "type": "string",
+            "description": "Name of the scene to modify."
+          },
+          "changed_properties": {
+            "type": "array",
+            "description": "Scene/project property changes. Each item is {property_name, new_value} with STRING values. Recognized property_name (fuzzy-matched): 'name' (renames the scene, updating events/references), 'backgroundColor' (hex or rgb), 'stopSoundsOnStartup' ('true'/'false'), 'isFirstScene' ('true' sets this scene as startup), and project-level 'gameResolutionWidth', 'gameResolutionHeight' (integers), 'gameOrientation', 'gameScaleMode', 'gameName'.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "property_name": {
+                  "type": "string",
+                  "description": "Name of the property to change (fuzzy-matched, e.g. 'name', 'backgroundColor', 'stopSoundsOnStartup', 'isFirstScene', 'gameResolutionWidth', 'gameResolutionHeight', 'gameOrientation', 'gameScaleMode', 'gameName')."
+                },
+                "new_value": {
+                  "type": "string",
+                  "description": "New value as a string (numbers/booleans/colors are parsed from this string)."
+                }
+              },
+              "required": [
+                "property_name",
+                "new_value"
+              ]
+            }
+          },
+          "changed_layers": {
+            "type": "array",
+            "description": "Layer additions/edits/removals. For each item: if a layer named 'layer_name' does not exist it is created (named 'new_layer_name' if given) at 'new_layer_position' (or appended); if it exists, it can be renamed via 'new_layer_name', moved via 'new_layer_position', or deleted via 'delete_this_layer' (optionally moving its instances to 'move_instances_to_layer').",
+            "items": {
+              "type": "object",
+              "properties": {
+                "layer_name": {
+                  "type": "string",
+                  "description": "Existing layer name to edit, or name to create. Required per item."
+                },
+                "new_layer_name": {
+                  "type": "string",
+                  "description": "New name for the layer (also the name used when creating)."
+                },
+                "new_layer_position": {
+                  "type": "number",
+                  "description": "Target position index for the layer."
+                },
+                "delete_this_layer": {
+                  "type": "boolean",
+                  "description": "If true, delete this layer."
+                },
+                "move_instances_to_layer": {
+                  "type": "string",
+                  "description": "When deleting, merge/move this layer's instances into the named layer instead of invalidating them."
+                }
+              },
+              "required": [
+                "layer_name"
+              ]
+            }
+          },
+          "changed_layer_effects": {
+            "type": "array",
+            "description": "Layer effect additions/edits/removals and effect property changes. Each item targets effect 'effect_name' on layer 'layer_name'. If the effect does not exist and 'effect_type' is given, it is created at 'new_effect_position'. Existing effects can be renamed via 'new_effect_name', moved via 'new_effect_position', or deleted via 'delete_this_effect'. Nested 'changed_properties' (array of {property_name,new_value} STRING values) sets the effect's parameters (parsed to number/boolean/string by the effect metadata type).",
+            "items": {
+              "type": "object",
+              "properties": {
+                "layer_name": {
+                  "type": "string",
+                  "description": "Layer the effect belongs to. Required per item."
+                },
+                "effect_name": {
+                  "type": "string",
+                  "description": "Effect name to create/edit. Required per item."
+                },
+                "effect_type": {
+                  "type": "string",
+                  "description": "Effect type identifier; required to create a new effect."
+                },
+                "new_effect_name": {
+                  "type": "string",
+                  "description": "New name for the effect (also used as the created effect's name)."
+                },
+                "new_effect_position": {
+                  "type": "number",
+                  "description": "Target position index for the effect."
+                },
+                "delete_this_effect": {
+                  "type": "boolean",
+                  "description": "If true, delete this effect."
+                },
+                "changed_properties": {
+                  "type": "array",
+                  "description": "Effect parameter changes; each {property_name, new_value} with STRING values, coerced to the parameter's type.",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "property_name": {
+                        "type": "string"
+                      },
+                      "new_value": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "property_name",
+                      "new_value"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "layer_name",
+                "effect_name"
+              ]
+            }
+          },
+          "changed_groups": {
+            "type": "array",
+            "description": "Object group changes. Each item targets 'group_name' (created if missing). Rename via 'new_group_name', delete via 'delete_this_group', or set members via 'objects' (an array of {object_name}; the group's membership is replaced to exactly match this list).",
+            "items": {
+              "type": "object",
+              "properties": {
+                "group_name": {
+                  "type": "string",
+                  "description": "Group name to create/edit. Required per item."
+                },
+                "new_group_name": {
+                  "type": "string",
+                  "description": "New name for the group (references updated)."
+                },
+                "delete_this_group": {
+                  "type": "boolean",
+                  "description": "If true, delete this group."
+                },
+                "objects": {
+                  "type": "array",
+                  "description": "Desired group membership. The group is updated to contain exactly these objects (others removed, new ones added).",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "object_name": {
+                        "type": "string",
+                        "description": "Name of an object to include in the group."
+                      }
+                    },
+                    "required": [
+                      "object_name"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "group_name"
+              ]
+            }
+          }
+        },
+        "required": [
+          "scene_name"
+        ]
+      }
+    },
+    "_modifiesProject": true,
+    "_requiresProject": true,
+    "_notes": "scene_name via extractRequiredString => required; errors/returns failure if scene not found. changed_properties/changed_layers/changed_layer_effects/changed_groups all via SafeExtractor.extractArrayProperty => optional. Property values are read with extractStringProperty (STRINGS) then coerced: parseInt for resolution width/height, parseFloat for effect 'number' type, newValue.toLowerCase()==='true' for booleans. property_name fuzzy-matched (isFuzzyMatch lowercases and strips spaces/_/-). Per-item required fields: changed_properties item needs property_name+new_value (else skipped with warning); changed_layers needs layer_name; changed_layer_effects needs layer_name and effect_name (effect_type required to CREATE); changed_groups needs group_name; objects items use 'object_name'. modifiesProject: true."
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "create_object",
+      "description": "Create a new object in a scene (or as a global object). The object is created either by searching and installing an asset from the GDevelop asset store (provide 'search_terms' and/or 'asset_id', optionally 'description' and 'two_dimensional_view_kind' to guide selection), or as a blank object of an explicit 'object_type' when that type does not need an asset. You can also duplicate an existing object by passing 'duplicated_object_name' (and optionally 'duplicated_object_scene'). 'scene_name' and 'object_name' are required. If an object with 'object_name' already exists it is left unchanged (use create_or_replace_object to replace). Use 'target_object_scope' to choose where the object lives ('scene' or 'global'); setting it to a scope different from an existing object's scope will MOVE the object between scene and global. If 'search_terms'/'asset_id' are omitted and the type has no default asset tag, a blank object is created.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scene_name": {
+            "type": "string",
+            "description": "Name of the scene (layout) the object belongs to / is created in. Must be an existing scene."
+          },
+          "object_name": {
+            "type": "string",
+            "description": "Name of the object to create. If it already exists, nothing is changed."
+          },
+          "object_type": {
+            "type": "string",
+            "description": "Explicit GDevelop object type (e.g. 'Sprite', 'TextObject::Text', 'PanelSpriteObject::PanelSprite'). If omitted, inferred from an existing object of the same name. If the named object already exists with a different type, the call fails."
+          },
+          "target_object_scope": {
+            "type": "string",
+            "enum": [
+              "scene",
+              "global"
+            ],
+            "description": "Where the object should live. 'scene' = local to scene_name, 'global' = available to all scenes. If it differs from the scope of an already-existing object with the same name, the object is moved between scene and global."
+          },
+          "search_terms": {
+            "type": "string",
+            "description": "Free-text search terms used to find a matching asset in the GDevelop asset store."
+          },
+          "asset_id": {
+            "type": "string",
+            "description": "Exact or partial asset id to install from the asset store (alternative/complement to search_terms)."
+          },
+          "description": {
+            "type": "string",
+            "description": "Natural-language description of the desired object, used to help pick the best asset from the store."
+          },
+          "two_dimensional_view_kind": {
+            "type": "string",
+            "description": "Hint about the desired 2D viewpoint/style of the asset (e.g. side view, top-down), passed to the asset search."
+          },
+          "duplicated_object_name": {
+            "type": "string",
+            "description": "If set, create the new object by duplicating this existing object (copying its type, behaviors, properties and effects) instead of installing an asset."
+          },
+          "duplicated_object_scene": {
+            "type": "string",
+            "description": "Scene where 'duplicated_object_name' is found. If omitted, defaults to scene_name (or global objects)."
+          }
+        },
+        "required": [
+          "scene_name",
+          "object_name"
+        ]
+      }
+    },
+    "_modifiesProject": true,
+    "_requiresProject": true,
+    "_notes": "create_object maps to the same handler (createOrReplaceObject, index.js line 6363) as create_or_replace_object. Required strings via extractRequiredString: scene_name, object_name. All others via SafeExtractor.extractStringProperty/extractBooleanProperty (optional). 'replace_existing_object' (boolean) also read by the handler but is the distinguishing arg for create_or_replace_object; for create_object it is normally omitted/false. target_object_scope switches on 'global' vs 'scene'. If object exists, it is NOT replaced unless replace_existing_object is true."
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "create_or_replace_object",
+      "description": "Create an object, or REPLACE the visuals of an existing object with a different asset from the GDevelop asset store while keeping its type/behaviors/properties/effects (asset swap). Set 'replace_existing_object' true to replace an existing object named 'object_name'; replacement requires at least one of 'search_terms', 'description', 'asset_id', or 'two_dimensional_view_kind'. If the object does not exist it is created instead (same behavior as create_object: install an asset via search_terms/asset_id, create a blank object of 'object_type', or duplicate via 'duplicated_object_name'). 'scene_name' and 'object_name' are required. Use 'target_object_scope' ('scene'|'global') to control where the object lives; a differing scope moves the object between scene and global.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scene_name": {
+            "type": "string",
+            "description": "Name of the scene (layout) the object belongs to. Must be an existing scene."
+          },
+          "object_name": {
+            "type": "string",
+            "description": "Name of the object to create or replace."
+          },
+          "replace_existing_object": {
+            "type": "boolean",
+            "description": "If true and an object named object_name exists, replace its asset/visuals (keeping type, behaviors, properties, effects). Requires at least one of search_terms/description/asset_id/two_dimensional_view_kind."
+          },
+          "object_type": {
+            "type": "string",
+            "description": "Explicit GDevelop object type. If the existing object has a different type, the call fails. Used when creating a new object."
+          },
+          "target_object_scope": {
+            "type": "string",
+            "enum": [
+              "scene",
+              "global"
+            ],
+            "description": "Where the object should live ('scene' or 'global'). A scope differing from an existing object's scope moves it between scene and global."
+          },
+          "search_terms": {
+            "type": "string",
+            "description": "Free-text asset-store search terms used to find a replacement/new asset."
+          },
+          "asset_id": {
+            "type": "string",
+            "description": "Exact or partial asset id to install from the asset store."
+          },
+          "description": {
+            "type": "string",
+            "description": "Natural-language description guiding asset selection."
+          },
+          "two_dimensional_view_kind": {
+            "type": "string",
+            "description": "Hint about the desired 2D viewpoint/style of the asset."
+          },
+          "duplicated_object_name": {
+            "type": "string",
+            "description": "If set (and not replacing), create the new object by duplicating this existing object."
+          },
+          "duplicated_object_scene": {
+            "type": "string",
+            "description": "Scene where 'duplicated_object_name' is found. Defaults to scene_name / global objects."
+          }
+        },
+        "required": [
+          "scene_name",
+          "object_name"
+        ]
+      }
+    },
+    "_modifiesProject": true,
+    "_requiresProject": true,
+    "_notes": "Handler createOrReplaceObject (index.js line 778, modifiesProject:true). Shared with create_object. Branching: existingObjectShouldBeMoved (scope change) -> move; else replace_existing_object true -> replaceExistingObject (needs search_terms/description/two_dimensional_view_kind/asset_id); else duplicated_object_name -> duplicate; else create. Required via extractRequiredString: scene_name, object_name. All other args optional via SafeExtractor."
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "inspect_object_properties",
+      "description": "Read and return the properties of a single object (searched in the given scene first, then global objects). Returns the object's configurable properties (with current values), its behaviors (name + type), and animation names if any. Also reports counts of variables and behaviors with hints to inspect them via inspect_variables / inspect_behavior_properties. Use this before change_object_property to learn the exact property names. Does not modify the project.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scene_name": {
+            "type": "string",
+            "description": "Name of the scene to look in (object is searched in this scene, then in global objects). Must be an existing scene."
+          },
+          "object_name": {
+            "type": "string",
+            "description": "Name of the object whose properties to inspect."
+          }
+        },
+        "required": [
+          "scene_name",
+          "object_name"
+        ]
+      }
+    },
+    "_modifiesProject": false,
+    "_requiresProject": true,
+    "_notes": "Handler inspectObjectProperties (index.js line 1410, modifiesProject:false). Both args required via extractRequiredString. No optional args."
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "change_object_property",
+      "description": "Change one or more configurable properties of an existing object (searched in the given scene, then global objects). Pass 'changed_properties' as an array of {property_name, new_value} entries where BOTH fields are STRINGS (numeric/boolean values must be given as strings). Property names are matched against the object's properties (case/label tolerant). A special property name of 'name' (or 'object_name'/'objectName') renames the object. Call inspect_object_properties first to discover valid property names. Note: instance position/size/rotation are NOT changed here (use the instance tools); resources cannot be added by name only.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scene_name": {
+            "type": "string",
+            "description": "Name of the scene to look in (object searched in this scene, then global objects). Must be an existing scene."
+          },
+          "object_name": {
+            "type": "string",
+            "description": "Name of the object to modify."
+          },
+          "changed_properties": {
+            "type": "array",
+            "description": "List of property changes to apply. Each item must have 'property_name' and 'new_value', both as strings.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "property_name": {
+                  "type": "string",
+                  "description": "Name of the property to change. Use 'name' (or 'object_name'/'objectName') to rename the object."
+                },
+                "new_value": {
+                  "type": "string",
+                  "description": "New value for the property, as a string (e.g. \"true\", \"42\", \"Hello\")."
+                }
+              },
+              "required": [
+                "property_name",
+                "new_value"
+              ]
+            }
+          }
+        },
+        "required": [
+          "scene_name",
+          "object_name",
+          "changed_properties"
+        ]
+      }
+    },
+    "_modifiesProject": true,
+    "_requiresProject": true,
+    "_notes": "Handler changeObjectProperty (index.js line 1549, modifiesProject:true). scene_name & object_name required via extractRequiredString. changed_properties via SafeExtractor.extractArrayProperty (defaults to [] if missing — empty array means no changes). Each item read via SafeExtractor.extractStringProperty(item,'property_name') and ('new_value') — both must be strings (string-typed new_value confirmed). isPropertyForChangingObjectName treats property_name 'name' or 'objectname' (ignoring -,_,space) as a rename."
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "describe_instances",
+      "description": "List the instances placed in a scene's layout, across all layers. Returns each instance with a short 'id' (first 10 chars of its persistent UUID — use this id with the instance editing tools), object name, layer, position (x, y, and z for 3D), rotation, and computed width/height/depth (accounting for default size when no custom size is set). Optionally filter to specific objects via 'filter_by_object_name' (a comma-separated list of object names, case-insensitive). Does not modify the project.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scene_name": {
+            "type": "string",
+            "description": "Name of the scene whose instances to describe. Must be an existing scene."
+          },
+          "filter_by_object_name": {
+            "type": "string",
+            "description": "Optional comma-separated list of object names to restrict the results to (case-insensitive, whitespace trimmed). Omit to list all instances."
+          }
+        },
+        "required": [
+          "scene_name"
+        ]
+      }
+    },
+    "_modifiesProject": false,
+    "_requiresProject": true,
+    "_notes": "Handler describeInstances (index.js line 2629, modifiesProject:false). scene_name required via extractRequiredString. filter_by_object_name via SafeExtractor.extractStringProperty, optional, parsed as CSV split on ',' then trimmed/lowercased. Returned instance 'id' = persistentUuid.slice(0,10)."
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "add_behavior",
+      "description": "Add a behavior (e.g. Platform, PlatformerObject, Physics, Draggable) to an object, or to every object of a group, in a scene. behavior_type is the full behavior type identifier, usually namespaced as 'ExtensionName::BehaviorName' (the extension is auto-installed if needed). behavior_name is an optional instance name; if omitted the behavior's default name is used (recommended, so shared data is shared between objects). Skips/ warns if the behavior already exists, is a default capability, or the object type is incompatible.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scene_name": {
+            "type": "string",
+            "description": "Name of the scene containing the object or group."
+          },
+          "object_name": {
+            "type": "string",
+            "description": "Name of the object OR group to add the behavior to. If a group, the behavior is added to every object in it."
+          },
+          "behavior_type": {
+            "type": "string",
+            "description": "Full behavior type identifier, usually 'ExtensionName::BehaviorName' (e.g. 'PlatformBehavior::PlatformerObjectBehavior')."
+          },
+          "behavior_name": {
+            "type": "string",
+            "description": "Optional instance name for the behavior. Omit to use the behavior's default name (recommended)."
+          }
+        },
+        "required": [
+          "scene_name",
+          "object_name",
+          "behavior_type"
+        ]
+      }
+    },
+    "_modifiesProject": true,
+    "_requiresProject": true,
+    "_notes": "Required strings via extractRequiredString: scene_name, object_name, behavior_type. behavior_name optional via SafeExtractor.extractStringProperty. behavior_type containing '::' triggers extension install of the part before '::'."
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "remove_behavior",
+      "description": "Remove a behavior (by its instance name) from an object, or from every object of a group, in a scene. Also removes any dependent behaviors that required it. Warns if the named behavior is not present on an object.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scene_name": {
+            "type": "string",
+            "description": "Name of the scene containing the object or group."
+          },
+          "object_name": {
+            "type": "string",
+            "description": "Name of the object OR group. If a group, the behavior is removed from every object in it that has it."
+          },
+          "behavior_name": {
+            "type": "string",
+            "description": "Instance name of the behavior to remove (not the behavior type)."
+          }
+        },
+        "required": [
+          "scene_name",
+          "object_name",
+          "behavior_name"
+        ]
+      }
+    },
+    "_modifiesProject": true,
+    "_requiresProject": true,
+    "_notes": "All three args required via extractRequiredString. Dependent behaviors are auto-removed too."
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "inspect_behavior_properties",
+      "description": "Read the current properties (and shared/behavior-shared-data properties, if any) of a named behavior attached to an object or group in a scene. Returns property names, values, and metadata. Read-only. Use this before change_behavior_property to learn the exact property names and current values.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scene_name": {
+            "type": "string",
+            "description": "Name of the scene containing the object or group."
+          },
+          "object_name": {
+            "type": "string",
+            "description": "Name of the object OR group that carries the behavior. For a group, the first object having the behavior is inspected."
+          },
+          "behavior_name": {
+            "type": "string",
+            "description": "Instance name of the behavior to inspect."
+          }
+        },
+        "required": [
+          "scene_name",
+          "object_name",
+          "behavior_name"
+        ]
+      }
+    },
+    "_modifiesProject": false,
+    "_requiresProject": true,
+    "_notes": "All three args required via extractRequiredString. modifiesProject:false. Returns { success, behaviorName, properties, sharedProperties }."
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "change_behavior_property",
+      "description": "Change one or more properties of a named behavior on an object or group in a scene. Properties are passed in 'changed_properties' as an array of objects, each with 'property_name' (the exact property name, as seen via inspect_behavior_properties) and 'new_value' (ALWAYS a string, even for numbers/booleans). Matches against both the behavior's own properties and its behavior-shared-data properties. For a group, the change is applied to the behavior on every object that has it. Items missing property_name or new_value are skipped with a warning.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scene_name": {
+            "type": "string",
+            "description": "Name of the scene containing the object or group."
+          },
+          "object_name": {
+            "type": "string",
+            "description": "Name of the object OR group carrying the behavior. For a group, applied to all objects that have the behavior."
+          },
+          "behavior_name": {
+            "type": "string",
+            "description": "Instance name of the behavior whose properties to change."
+          },
+          "changed_properties": {
+            "type": "array",
+            "description": "List of property changes to apply.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "property_name": {
+                  "type": "string",
+                  "description": "Exact property name to change."
+                },
+                "new_value": {
+                  "type": "string",
+                  "description": "New value as a STRING (booleans as 'true'/'false', numbers as their string form)."
+                }
+              },
+              "required": [
+                "property_name",
+                "new_value"
+              ]
+            }
+          }
+        },
+        "required": [
+          "scene_name",
+          "object_name",
+          "behavior_name",
+          "changed_properties"
+        ]
+      }
+    },
+    "_modifiesProject": true,
+    "_requiresProject": true,
+    "_notes": "scene_name/object_name/behavior_name required via extractRequiredString. changed_properties via SafeExtractor.extractArrayProperty (defaults to [] if absent — but with no changes nothing happens, so effectively required). Each item read via extractStringProperty for 'property_name' and 'new_value' (both strings)."
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "add_or_edit_variable",
+      "description": "Create, edit, or delete one or more variables in a given scope. variable_scope is 'scene' (requires scene_name), 'object' or 'group' (requires object_name; optionally scene_name — omit scene_name for a global object/group), or 'global'. Provide variables to change in the 'variables' array; each item has 'variable_name_or_path' (a name or dotted/structured path), 'value' (string; required unless deleting), optional 'variable_type' to force the type, and optional 'delete_this_variable' (boolean) to delete instead of set. A single variable may alternatively be passed via top-level variable_name_or_path/value/variable_type without the array.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "variable_scope": {
+            "type": "string",
+            "enum": [
+              "scene",
+              "object",
+              "group",
+              "global"
+            ],
+            "description": "Scope of the variables. 'scene' needs scene_name; 'object'/'group' need object_name (scene_name optional, omit for global object); 'global' needs neither."
+          },
+          "scene_name": {
+            "type": "string",
+            "description": "Scene name. Required for variable_scope 'scene'; optional for 'object'/'group' (omit to target a global object/group)."
+          },
+          "object_name": {
+            "type": "string",
+            "description": "Object or group name. Required for variable_scope 'object' or 'group'."
+          },
+          "variables": {
+            "type": "array",
+            "description": "List of variable operations. Preferred way to set/delete one or many variables.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "variable_name_or_path": {
+                  "type": "string",
+                  "description": "Variable name or path (e.g. 'Score' or 'Player.health')."
+                },
+                "value": {
+                  "type": "string",
+                  "description": "New value as a string. Required unless delete_this_variable is true."
+                },
+                "variable_type": {
+                  "type": "string",
+                  "description": "Optional: force the variable type (e.g. 'string', 'number', 'boolean', 'structure', 'array')."
+                },
+                "delete_this_variable": {
+                  "type": "boolean",
+                  "description": "If true, delete this variable instead of setting it."
+                }
+              },
+              "required": [
+                "variable_name_or_path"
+              ]
+            }
+          },
+          "variable_name_or_path": {
+            "type": "string",
+            "description": "Single-variable fallback (used only when 'variables' array is absent)."
+          },
+          "value": {
+            "type": "string",
+            "description": "Single-variable fallback value (string)."
+          },
+          "variable_type": {
+            "type": "string",
+            "description": "Single-variable fallback forced type."
+          }
+        },
+        "required": [
+          "variable_scope"
+        ]
+      }
+    },
+    "_modifiesProject": true,
+    "_requiresProject": true,
+    "_notes": "variable_scope required via extractRequiredString; scene_name/object_name optional via extractStringProperty (validated at runtime per scope). Operations from 'variables' array (extractArrayProperty); each item: variable_name_or_path/value/variable_type via extractStringProperty (all strings), delete_this_variable via extractBooleanProperty. If 'variables' absent, falls back to top-level variable_name_or_path/value/variable_type. Empty operations -> failure. variable_type enum values inferred (string/number/boolean/structure/array) — code passes it as forcedVariableType."
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "inspect_variables",
+      "description": "Read variables in a given scope. variable_scope is 'scene' (needs scene_name), 'object'/'group' (needs object_name, scene_name optional — omit for a global object), or 'global'. Optionally pass 'variable_names_or_paths' (array of strings) to fetch only specific variables/paths; if omitted, returns all variables in the scope. Read-only. Reports any requested paths that were not found.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "variable_scope": {
+            "type": "string",
+            "enum": [
+              "scene",
+              "object",
+              "group",
+              "global"
+            ],
+            "description": "Scope to inspect. 'scene' needs scene_name; 'object'/'group' need object_name (scene_name optional); 'global' needs neither."
+          },
+          "scene_name": {
+            "type": "string",
+            "description": "Scene name. Required for 'scene' scope; optional for 'object'/'group'."
+          },
+          "object_name": {
+            "type": "string",
+            "description": "Object or group name. Required for 'object' or 'group' scope."
+          },
+          "variable_names_or_paths": {
+            "type": "array",
+            "description": "Optional list of specific variable names or paths to read. If omitted, all variables in the scope are returned.",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "variable_scope"
+        ]
+      }
+    },
+    "_modifiesProject": false,
+    "_requiresProject": true,
+    "_notes": "variable_scope required via extractRequiredString; scene_name/object_name optional via extractStringProperty (validated per scope by resolveVariablesContainers). variable_names_or_paths via extractArrayProperty; non-string entries are dropped. modifiesProject:false. Empty list returns full container."
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "put_2d_instances",
+      "description": "Place, move, resize, rotate, or erase 2D instances of an existing object on a layer of a scene, using a virtual 'brush'. Behavior depends on brush_kind: 'point' places/moves all instances at brush_position; 'line' spreads them evenly from brush_position to brush_end_position; 'grid' lays them in a rectangle from brush_position to brush_end_position (column/row counts auto-computed from the rectangle aspect ratio unless row_count/column_count are given); 'random_in_circle' scatters them within brush_size radius of brush_position; 'none' leaves existing instances in place (new ones go to brush_position); 'erase' deletes instances (those listed in existing_instance_ids, and/or instances of object_name within brush_size of brush_position on the given layer). To create new instances, set object_name and new_instances_count. To edit existing instances, pass their ids via existing_instance_ids (get ids from describe_instances, the 'id' field; partial id prefixes match). If brush_position is omitted for placement, instances default to scene center. Positions/sizes are coordinate strings, not arrays.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scene_name": {
+            "type": "string",
+            "description": "Name of the scene (layout) to modify. Required; the call fails if the scene does not exist."
+          },
+          "layer_name": {
+            "type": "string",
+            "description": "Target layer name. Use an empty string \"\" for the base layer. Required; the call fails if a non-empty layer name does not exist in the scene."
+          },
+          "brush_kind": {
+            "type": "string",
+            "description": "How instances are positioned/affected. One of: 'point', 'line', 'grid', 'random_in_circle', 'none', 'erase'. 'line' and 'grid' require brush_end_position. Unknown values are treated as 'none'.",
+            "enum": [
+              "point",
+              "line",
+              "grid",
+              "random_in_circle",
+              "none",
+              "erase"
+            ]
+          },
+          "object_name": {
+            "type": "string",
+            "description": "Name of the existing object to instantiate. Required when creating new instances (new_instances_count > 0). The object must already exist in the scene or globally. For 'erase' with a brush (no explicit ids), only instances of this object are considered."
+          },
+          "brush_position": {
+            "type": "string",
+            "description": "Start/anchor position as two comma-separated numbers 'x,y' (e.g. '100,200'). For 'point' it is the placement position; for 'line'/'grid' it is the start corner; for 'random_in_circle'/'erase' it is the circle center. If omitted for placement, defaults to scene center (gameResolutionWidth/2, gameResolutionHeight/2)."
+          },
+          "brush_end_position": {
+            "type": "string",
+            "description": "End position as two comma-separated numbers 'x,y'. Required for brush_kind 'line' (end of the line) and 'grid' (opposite corner of the rectangle). Ignored by other brushes."
+          },
+          "brush_size": {
+            "type": "number",
+            "description": "Radius in pixels. For 'random_in_circle' it is the scatter radius around brush_position; for 'erase' it is the selection radius (instances within this distance of brush_position are deleted; 0 means exact-position match). Defaults to 0."
+          },
+          "existing_instance_ids": {
+            "type": "string",
+            "description": "Comma-separated list of existing instance ids to move/modify/erase (e.g. 'a1b2,c3d4'). Ids come from describe_instances (the 'id' field); each value is matched as a prefix of the instance's persistent UUID. Omit when only creating new instances."
+          },
+          "new_instances_count": {
+            "type": "number",
+            "description": "Number of new instances of object_name to create. If 0/omitted and no existing_instance_ids are given, defaults to 1 (or row_count*column_count when both are set for a grid)."
+          },
+          "instances_size": {
+            "type": "string",
+            "description": "Custom size applied to every affected instance, as two comma-separated numbers 'w,h' (e.g. '64,64'). Sets a custom width/height. Omit to keep the object's default size."
+          },
+          "instances_rotation": {
+            "type": "number",
+            "description": "Rotation angle in degrees applied to every affected instance. Omit to leave rotation unchanged."
+          },
+          "instances_opacity": {
+            "type": "number",
+            "description": "Opacity applied to every affected instance, 0-255 (0 transparent, 255 opaque). Omit to leave opacity unchanged."
+          },
+          "instances_z_order": {
+            "type": "number",
+            "description": "Z-order (draw order) applied to every affected instance. Omit to leave z-order unchanged."
+          },
+          "row_count": {
+            "type": "number",
+            "description": "Optional number of rows for the 'grid' brush. If both row_count and column_count are given, they override the auto-computed grid layout (and, when new_instances_count is unset, determine how many instances are created: row_count*column_count)."
+          },
+          "column_count": {
+            "type": "number",
+            "description": "Optional number of columns for the 'grid' brush. See row_count."
+          }
+        },
+        "required": [
+          "scene_name",
+          "layer_name",
+          "brush_kind"
+        ]
+      }
+    },
+    "_modifiesProject": true,
+    "_requiresProject": true,
+    "_notes": "All extraction confirmed in index.js put2dInstances.launchFunction (lines 2878-3481). Exact arg names via SafeExtractor: scene_name/layer_name/brush_kind via extractRequiredString (required -> call fails if missing). object_name, brush_position, brush_end_position, existing_instance_ids, instances_size via extractStringProperty (optional). brush_size, new_instances_count, instances_z_order, instances_rotation, instances_opacity, row_count, column_count via extractNumberProperty (optional). NOTE: instances_rotation is a NUMBER here (degrees), unlike put_3d_instances where it is a STRING. brush_position and brush_end_position are parsed by parseCommaSeparatedTwoFiniteNumbers => exactly 'x,y'. instances_size parsed by parseCommaSeparatedTwoFiniteNumbers => 'w,h'. existing_instance_ids split on ',' ; each id matched via getPersistentUuid().startsWith(id) (prefix match). Empty layer_name allowed (base layer). brush_kind switch handles 'erase','line','grid','random_in_circle','point', else treated as 'none'. modifiesProject:true set on the function."
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "put_3d_instances",
+      "description": "Place, move, resize, rotate, or erase 3D instances of an existing object on a layer of a scene, using a virtual 'brush' in X,Y,Z space. Behavior depends on brush_kind: 'point' places/moves all instances at brush_position; 'line' spreads them evenly from brush_position to brush_end_position in 3D; 'random_in_sphere' scatters them within brush_size radius of brush_position; 'none' leaves existing instances in place (new ones go to brush_position); 'erase' deletes instances (those listed in existing_instance_ids, and/or instances of object_name within brush_size of brush_position on the given layer). To create new instances, set object_name and new_instances_count. To edit existing instances, pass their ids via existing_instance_ids (get ids from describe_instances, the 'id' field; partial id prefixes match). If brush_position is omitted for placement, instances default to (sceneCenterX, sceneCenterY, 0). Positions/sizes/rotations are coordinate strings, not arrays.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scene_name": {
+            "type": "string",
+            "description": "Name of the scene (layout) to modify. Required; the call fails if the scene does not exist."
+          },
+          "layer_name": {
+            "type": "string",
+            "description": "Target layer name. Use an empty string \"\" for the base layer. Required; the call fails if a non-empty layer name does not exist in the scene."
+          },
+          "brush_kind": {
+            "type": "string",
+            "description": "How instances are positioned/affected. One of: 'point', 'line', 'random_in_sphere', 'none', 'erase'. 'line' uses brush_end_position. Unknown values are treated as 'none'.",
+            "enum": [
+              "point",
+              "line",
+              "random_in_sphere",
+              "none",
+              "erase"
+            ]
+          },
+          "object_name": {
+            "type": "string",
+            "description": "Name of the existing object to instantiate. Required when creating new instances (new_instances_count > 0). The object must already exist in the scene or globally. For 'erase' with a brush (no explicit ids), only instances of this object are considered."
+          },
+          "brush_position": {
+            "type": "string",
+            "description": "Start/anchor position as three comma-separated numbers 'x,y,z' (e.g. '100,200,0'). For 'point' it is the placement position; for 'line' the start point; for 'random_in_sphere'/'erase' the sphere center. If omitted for placement, defaults to (gameResolutionWidth/2, gameResolutionHeight/2, 0)."
+          },
+          "brush_end_position": {
+            "type": "string",
+            "description": "End position as three comma-separated numbers 'x,y,z'. Used by brush_kind 'line' (the end of the 3D line). Ignored by other brushes."
+          },
+          "brush_size": {
+            "type": "number",
+            "description": "Radius in 3D units. For 'random_in_sphere' it is the scatter radius around brush_position; for 'erase' it is the selection radius (instances within this 3D distance of brush_position are deleted; <= 0 means exact-position match on x,y,z). Defaults to 0."
+          },
+          "existing_instance_ids": {
+            "type": "string",
+            "description": "Comma-separated list of existing instance ids to move/modify/erase (e.g. 'a1b2,c3d4'). Ids come from describe_instances (the 'id' field); each value is matched as a prefix of the instance's persistent UUID. Omit when only creating new instances."
+          },
+          "new_instances_count": {
+            "type": "number",
+            "description": "Number of new instances of object_name to create. If 0/omitted and no existing_instance_ids are given, defaults to 1."
+          },
+          "instances_size": {
+            "type": "string",
+            "description": "Custom size applied to every affected instance, as three comma-separated numbers 'w,h,d' (width, height, depth, e.g. '64,64,64'). Sets custom width/height/depth. Omit to keep the object's default size."
+          },
+          "instances_rotation": {
+            "type": "string",
+            "description": "Rotation applied to every affected instance, as three comma-separated numbers 'rx,ry,rz' in degrees (rotation about X, Y, Z). All three components are required for rotation to apply. Omit to leave rotation unchanged."
+          }
+        },
+        "required": [
+          "scene_name",
+          "layer_name",
+          "brush_kind"
+        ]
+      }
+    },
+    "_modifiesProject": true,
+    "_requiresProject": true,
+    "_notes": "All extraction confirmed in index.js put3dInstances.launchFunction (lines 3490-~3940). Exact arg names via SafeExtractor: scene_name/layer_name/brush_kind via extractRequiredString (required). object_name, brush_position, brush_end_position, existing_instance_ids, instances_size, instances_rotation via extractStringProperty (optional). brush_size, new_instances_count via extractNumberProperty (optional). DIFFERENCES FROM 2D: brush_position/brush_end_position/instances_size use parseCommaSeparatedThreeFiniteNumbers => exactly 'x,y,z' / 'w,h,d' (THREE numbers). instances_rotation is a STRING parsed via split(',').map(parseFloat) and only applied if length>=3 ('rx,ry,rz'). There is NO instances_z_order, instances_opacity, row_count, or column_count for 3D, and NO 'grid'/'random_in_circle' brush; 3D adds 'random_in_sphere'. Default placement Z is 0. instances_size also sets hasCustomDepth + customDepth. existing_instance_ids matched via getPersistentUuid().startsWith(id) (prefix). modifiesProject:true set on the function."
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "read_scene_events",
+      "description": "Read and return the full event sheet (events/conditions/actions) of a named scene, rendered as human-readable text. Use this before editing events so you understand existing logic. Errors if the scene does not exist.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scene_name": {
+            "type": "string",
+            "description": "Exact name of the scene (layout) whose events to read. Must match an existing scene."
+          }
+        },
+        "required": [
+          "scene_name"
+        ]
+      }
+    },
+    "_modifiesProject": false,
+    "_requiresProject": true,
+    "_notes": "launchFunction reads only extractRequiredString(args,'scene_name'). Returns {eventsForSceneNamed, eventsAsText}. Errors via makeGenericFailure if !project.hasLayoutNamed(scene_name)."
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "add_scene_events",
+      "description": "Generate and insert new events into a scene's event sheet using natural-language descriptions. The IDE invokes a server-side events generator that produces valid GDevelop events from the description(s), installs any required extensions/behaviors/variables, and applies the changes. Provide either a single 'events_description' OR an array of 'event_batches' (each batch describing one chunk of events plus where to place it). Always pass 'extension_names_list'. Requires an active AI request context.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scene_name": {
+            "type": "string",
+            "description": "Exact name of the scene to add events to. Must match an existing scene."
+          },
+          "events_description": {
+            "type": "string",
+            "description": "Natural-language description of the events to generate. Provide this OR event_batches. Required if event_batches is not given."
+          },
+          "event_batches": {
+            "type": "array",
+            "description": "Alternative to events_description: a list of event chunks to generate, each with its own description and placement info. Must be non-empty and each batch must have a non-empty events_description.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "events_description": {
+                  "type": "string",
+                  "description": "Natural-language description of this batch of events. Required (non-empty) for each batch."
+                },
+                "placement_relation": {
+                  "type": "string",
+                  "description": "How/where to place this batch relative to the target event (e.g. before/after/inside). Defaults to '(unspecified)' if omitted."
+                },
+                "placement_target_event_id": {
+                  "type": "string",
+                  "description": "ID of an existing event to place this batch relative to."
+                },
+                "placement_expected_parent_event_id": {
+                  "type": "string",
+                  "description": "ID of the expected parent event under which this batch should be nested."
+                },
+                "placement_rationale": {
+                  "type": "string",
+                  "description": "Short explanation of why this placement was chosen."
+                }
+              },
+              "required": [
+                "events_description"
+              ]
+            }
+          },
+          "extension_names_list": {
+            "type": "string",
+            "description": "Required. List of GDevelop extension names relevant to generating these events (helps the generator pick correct actions/conditions)."
+          },
+          "objects_list": {
+            "type": "string",
+            "description": "Optional list of related object names to scope/inform the generation. Defaults to empty string."
+          },
+          "placement_hint": {
+            "type": "string",
+            "description": "Optional hint about where/how to place or adapt the generated events."
+          },
+          "estimated_complexity": {
+            "type": "number",
+            "description": "Optional estimated complexity of the requested events (numeric hint for the generator)."
+          }
+        },
+        "required": [
+          "scene_name",
+          "extension_names_list"
+        ]
+      }
+    },
+    "_modifiesProject": true,
+    "_requiresProject": true,
+    "_notes": "launchFunction: extractRequiredString scene_name & extension_names_list (both required, error if missing). extractStringProperty events_description, objects_list (null->''), placement_hint (||''). extractArrayProperty event_batches; per-batch extractStringProperty events_description/placement_relation/placement_target_event_id/placement_expected_parent_event_id/placement_rationale. extractNumberProperty estimated_complexity. Must supply events_description OR non-empty event_batches (each batch needs events_description) else makeGenericFailure. Also requires relatedAiRequestId in context. Calls server-side generateEvents() then applies changes."
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "generate_events",
+      "description": "Identical to add_scene_events (same underlying implementation): generate and insert new events into a scene's event sheet from natural-language descriptions. Provide either 'events_description' OR a non-empty 'event_batches' array, plus 'extension_names_list'. The IDE runs a server-side generator that produces valid GDevelop events and applies them.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scene_name": {
+            "type": "string",
+            "description": "Exact name of the scene to add events to. Must match an existing scene."
+          },
+          "events_description": {
+            "type": "string",
+            "description": "Natural-language description of the events to generate. Provide this OR event_batches."
+          },
+          "event_batches": {
+            "type": "array",
+            "description": "Alternative to events_description: list of event chunks, each with description and placement info. Must be non-empty; each batch must have a non-empty events_description.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "events_description": {
+                  "type": "string",
+                  "description": "Natural-language description of this batch of events. Required for each batch."
+                },
+                "placement_relation": {
+                  "type": "string",
+                  "description": "Placement relation relative to the target event. Defaults to '(unspecified)'."
+                },
+                "placement_target_event_id": {
+                  "type": "string",
+                  "description": "ID of an existing event to place this batch relative to."
+                },
+                "placement_expected_parent_event_id": {
+                  "type": "string",
+                  "description": "ID of the expected parent event for nesting."
+                },
+                "placement_rationale": {
+                  "type": "string",
+                  "description": "Short rationale for the placement."
+                }
+              },
+              "required": [
+                "events_description"
+              ]
+            }
+          },
+          "extension_names_list": {
+            "type": "string",
+            "description": "Required. List of relevant GDevelop extension names."
+          },
+          "objects_list": {
+            "type": "string",
+            "description": "Optional list of related object names. Defaults to empty string."
+          },
+          "placement_hint": {
+            "type": "string",
+            "description": "Optional hint about placement/adaptation of generated events."
+          },
+          "estimated_complexity": {
+            "type": "number",
+            "description": "Optional numeric complexity estimate for the generator."
+          }
+        },
+        "required": [
+          "scene_name",
+          "extension_names_list"
+        ]
+      }
+    },
+    "_modifiesProject": true,
+    "_requiresProject": true,
+    "_notes": "In index.js the registry maps generate_events: addSceneEvents — it is the exact same EditorFunction object/implementation as add_scene_events, so schema/args/required are identical."
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "read_game_project_json",
+      "description": "Inspect the overall game project structure. This is a no-op on the client: the IDE sends the function-call output to the backend together with an up-to-date game project JSON, which the backend uses to compute the actual read result. Takes no arguments.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    },
+    "_modifiesProject": false,
+    "_requiresProject": true,
+    "_notes": "launchFunction does no SafeExtractor reads and just returns {success:true}; the real result is computed backend-side from the project JSON. No arguments."
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "read_full_docs",
+      "description": "Request full GDevelop documentation for one or more extensions. NOTE: the client cannot actually fetch docs — it always returns a failure asking the model to continue with existing GDevelop knowledge.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "extension_names": {
+            "type": "string",
+            "description": "Name(s) of the extension(s) to read documentation for."
+          }
+        },
+        "required": []
+      }
+    },
+    "_modifiesProject": false,
+    "_requiresProject": true,
+    "_notes": "launchFunction always returns makeGenericFailure ('Unable to read full documentation...'); it reads no args. Only renderForEditor reads extractStringProperty(args,'extension_names') (optional, not validated/required). So extension_names is the only known arg and is not strictly required by code."
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "search_docs",
+      "description": "Search the GDevelop documentation. NOTE: the client cannot actually search — it always returns a failure asking the model to continue with existing GDevelop knowledge.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    },
+    "_modifiesProject": false,
+    "_requiresProject": true,
+    "_notes": "Neither launchFunction nor renderForEditor read any args; launchFunction always returns makeGenericFailure. No discoverable argument names in source (likely a query arg conceptually, but the code reads none)."
+  }
+]

@@ -1,0 +1,13 @@
+import puppeteer from 'puppeteer-core';
+const OUT = 'C:/Users/nalar/AppData/Local/Temp/claude/C--Users-nalar-gdeveloplocal/15b5a006-53f7-4dbf-adb9-50cdb05b2842/scratchpad/home.png';
+const b = await puppeteer.launch({ executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe', headless: 'new', defaultViewport: { width: 1600, height: 1000 }, args: ['--no-sandbox', '--enable-unsafe-swiftshader'] });
+const p = await b.newPage();
+const errs = [];
+p.on('console', m => { if (m.type() === 'error') errs.push(m.text().slice(0, 90)); });
+await p.goto('http://localhost:3000', { waitUntil: 'domcontentloaded', timeout: 90000 }).catch(() => {});
+await new Promise(r => setTimeout(r, 13000));
+const overlay = await p.evaluate(() => !!document.querySelector('#webpack-dev-server-client-overlay'));
+await p.screenshot({ path: OUT });
+console.log('dev-error-overlay present:', overlay);
+console.log('console errors:', errs.length, 'unique:', JSON.stringify([...new Set(errs)].slice(0, 5)));
+await b.close();

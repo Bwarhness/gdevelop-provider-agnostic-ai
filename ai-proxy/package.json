@@ -1,0 +1,18 @@
+{
+  "name": "gdevelop-ai-proxy",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Provider-agnostic shim that implements GDevelop's Generation API and translates it to any OpenAI-compatible /chat/completions backend (Kimi, OpenAI, Gemini, Ollama, vLLM, ...).",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/server.js",
+    "dev": "node --env-file-if-exists=.env --watch src/server.js",
+    "test": "node --test"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2"
+  }
+}

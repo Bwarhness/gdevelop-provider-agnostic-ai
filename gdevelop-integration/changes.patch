@@ -1,0 +1,625 @@
+diff --git a/newIDE/app/config-overrides.js b/newIDE/app/config-overrides.js
+index 37ae10f..e05c82f 100644
+--- a/newIDE/app/config-overrides.js
++++ b/newIDE/app/config-overrides.js
+@@ -24,6 +24,19 @@ module.exports = {
+     return config;
+   },
+ 
++  // Don't pop the full-screen dev overlay for runtime errors. When running against a
++  // local AI proxy (no GDevelop cloud account), some background cloud calls fail
++  // harmlessly; their uncaught network errors should not cover the editor. Compile-error
++  // overlays are kept.
++  devServer: function(configFunction) {
++    return function(proxy, allowedHost) {
++      const config = configFunction(proxy, allowedHost);
++      config.client = config.client || {};
++      config.client.overlay = { errors: true, warnings: false, runtimeErrors: false };
++      return config;
++    };
++  },
++
+   jest: function(config) {
+     config.transformIgnorePatterns = [
+       '<rootDir>/node_modules/(?!react-markdown|vfile|unist-.*|unified|bail|trough|character-entities|remark-parse|mdast-util-.*|micromark|decode-named-character-reference|remark-rehype|property-information|hast-util-.*|space-separated-tokens|comma-separated-tokens|ccount|escape-string-regexp|trim-lines|hast-util-whitespace|remark-gfm|mdast-util-gfm|mdast-util-find-and-replace|mdast-util-to-markdown|markdown-table|is-plain-obj)',
+diff --git a/newIDE/app/src/AiGeneration/AiConfiguration.js b/newIDE/app/src/AiGeneration/AiConfiguration.js
+index 5055fa3..0cb774f 100644
+--- a/newIDE/app/src/AiGeneration/AiConfiguration.js
++++ b/newIDE/app/src/AiGeneration/AiConfiguration.js
+@@ -4,6 +4,7 @@ import {
+   type AiConfigurationPreset,
+   type AiSettings,
+ } from '../Utils/GDevelopServices/Generation';
++import { isLocalAiEnabled } from '../Profile/LocalAiUser';
+ 
+ export type AiConfigurationPresetWithAvailability = {|
+   ...AiConfigurationPreset,
+@@ -24,6 +25,17 @@ export const getAiConfigurationPresetsWithAvailability = ({
+     return [];
+   }
+ 
++  // Local AI provider: the user runs their own LLM, so there is no GDevelop subscription
++  // to gate on — every preset / reasoning level is available.
++  if (isLocalAiEnabled()) {
++    return aiSettings.aiRequest.presets.map(preset => ({
++      ...preset,
++      enableWith: null,
++      enabledWithPlans: [],
++      disabled: false,
++    }));
++  }
++
+   if (!limits) {
+     return aiSettings.aiRequest.presets.map(preset => ({
+       ...preset,
+diff --git a/newIDE/app/src/AiGeneration/AiRequestChat/LocalAiModelSelector.js b/newIDE/app/src/AiGeneration/AiRequestChat/LocalAiModelSelector.js
+new file mode 100644
+index 0000000..8620bd6
+--- /dev/null
++++ b/newIDE/app/src/AiGeneration/AiRequestChat/LocalAiModelSelector.js
+@@ -0,0 +1,210 @@
++// @flow
++// Local-AI-only: a model picker shown in the Ask AI chat footer (next to the reasoning
++// level selector). It lists the OpenAI-compatible models the local oh-my-pi proxy knows
++// about (GET <proxy>/omp-models) and switches the running proxy's active model/provider
++// (POST <proxy>/config) — no app restart needed. Renders nothing unless local AI is on.
++import * as React from 'react';
++import { Trans } from '@lingui/macro';
++import ButtonBase from '@material-ui/core/ButtonBase';
++import Menu from '@material-ui/core/Menu';
++import MenuItem from '@material-ui/core/MenuItem';
++import ListSubheader from '@material-ui/core/ListSubheader';
++import Tooltip from '@material-ui/core/Tooltip';
++import Paper from '../../UI/Paper';
++import ChevronArrowBottom from '../../UI/CustomSvgIcons/ChevronArrowBottom';
++import { tooltipEnterDelay } from '../../UI/Tooltip';
++import { isLocalAiEnabled } from '../../Profile/LocalAiUser';
++import { GDevelopGenerationApi } from '../../Utils/GDevelopServices/ApiConfigs';
++
++const PROXY = GDevelopGenerationApi.baseUrl;
++const LOCAL_PROVIDERS = ['ollama', 'llama.cpp', 'lm-studio'];
++
++// Map a model's oh-my-pi provider to the proxy auth source + any required headers.
++const authSourceForProvider = (provider: string): string =>
++  provider === 'kimi-code'
++    ? 'omp-kimi'
++    : LOCAL_PROVIDERS.includes(provider)
++    ? ''
++    : `omp:${provider}`;
++const headersForProvider = (provider: string): Object =>
++  provider === 'kimi-code'
++    ? { 'User-Agent': 'KimiCLI/1.0', 'X-Msh-Platform': 'kimi_cli' }
++    : {};
++
++const styles = {
++  paper: { borderRadius: 8, display: 'flex' },
++  button: { padding: '4px 4px 4px 8px', display: 'flex', alignItems: 'center' },
++  label: {
++    fontSize: 13,
++    fontFamily: 'var(--gdevelop-modern-font-family)',
++    whiteSpace: 'nowrap',
++    maxWidth: 180,
++    overflow: 'hidden',
++    textOverflow: 'ellipsis',
++    margin: '0 4px',
++  },
++  chevronIcon: { fontSize: 20 },
++  subheader: { lineHeight: '20px', paddingTop: 4, paddingBottom: 4 },
++  menuItemContent: {
++    display: 'flex',
++    alignItems: 'center',
++    justifyContent: 'space-between',
++    width: '100%',
++    gap: 16,
++  },
++  check: { fontSize: 13, opacity: 0.7 },
++};
++
++type Model = {
++  provider: string,
++  id: string,
++  name: string,
++  baseUrl: string,
++  reasoning?: boolean,
++  hasCredential?: boolean,
++};
++
++type Props = {| disabled?: boolean |};
++
++export const LocalAiModelSelector = ({ disabled }: Props): React.Node => {
++  const [models, setModels] = React.useState<Array<Model>>([]);
++  const [current, setCurrent] = React.useState<?{ baseUrl: string, model: string }>(
++    null
++  );
++  const [anchorEl, setAnchorEl] = React.useState(null);
++  const [switching, setSwitching] = React.useState(false);
++  const isMenuOpen = Boolean(anchorEl);
++
++  React.useEffect(() => {
++    if (!isLocalAiEnabled()) return;
++    let cancelled = false;
++    (async () => {
++      try {
++        const [modelsRes, configRes] = await Promise.all([
++          fetch(`${PROXY}/omp-models`)
++            .then(r => r.json())
++            .catch(() => ({ models: [] })),
++          fetch(`${PROXY}/config`)
++            .then(r => r.json())
++            .catch(() => null),
++        ]);
++        if (cancelled) return;
++        const all: Array<Model> = (modelsRes && modelsRes.models) || [];
++        // Only offer usable models: ones with a credential on file, or local servers.
++        setModels(
++          all.filter(m => m.hasCredential || LOCAL_PROVIDERS.includes(m.provider))
++        );
++        if (configRes)
++          setCurrent({ baseUrl: configRes.baseUrl, model: configRes.model });
++      } catch (e) {
++        // Proxy not reachable / not the local proxy — leave the selector empty (hidden).
++      }
++    })();
++    return () => {
++      cancelled = true;
++    };
++  }, []);
++
++  if (!isLocalAiEnabled() || models.length === 0) return null;
++
++  const currentModelId = current && current.model;
++  const currentModel = models.find(
++    m =>
++      m.id === currentModelId &&
++      (!current || !current.baseUrl || m.baseUrl === current.baseUrl)
++  );
++  const currentLabel = currentModel
++    ? currentModel.name || currentModel.id
++    : currentModelId || 'Model';
++
++  const selectModel = async (m: Model) => {
++    setAnchorEl(null);
++    setSwitching(true);
++    try {
++      const res = await fetch(`${PROXY}/config`, {
++        method: 'POST',
++        headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify({
++          baseUrl: m.baseUrl,
++          model: m.id,
++          authSource: authSourceForProvider(m.provider),
++          extraHeaders: headersForProvider(m.provider),
++        }),
++      });
++      const config = await res.json();
++      setCurrent({ baseUrl: config.baseUrl, model: config.model });
++    } catch (e) {
++      // ignore — proxy will keep its previous model
++    } finally {
++      setSwitching(false);
++    }
++  };
++
++  // Group models by provider for the menu.
++  const providers = [];
++  const byProvider: { [string]: Array<Model> } = {};
++  for (const m of models) {
++    if (!byProvider[m.provider]) {
++      byProvider[m.provider] = [];
++      providers.push(m.provider);
++    }
++    byProvider[m.provider].push(m);
++  }
++
++  return (
++    <>
++      <Paper
++        background="light"
++        style={{ ...styles.paper, opacity: disabled || switching ? 0.5 : 1 }}
++      >
++        <Tooltip title={<Trans>AI model</Trans>} enterDelay={tooltipEnterDelay}>
++          <span>
++            <ButtonBase
++              onClick={e => setAnchorEl(e.currentTarget)}
++              disabled={disabled || switching}
++              style={styles.button}
++            >
++              <span style={styles.label}>{currentLabel}</span>
++              <ChevronArrowBottom style={styles.chevronIcon} />
++            </ButtonBase>
++          </span>
++        </Tooltip>
++      </Paper>
++      <Menu
++        anchorEl={anchorEl}
++        open={isMenuOpen}
++        onClose={() => setAnchorEl(null)}
++        MenuListProps={{ dense: true }}
++      >
++        <ListSubheader disableSticky style={styles.subheader}>
++          <Trans>AI model:</Trans>
++        </ListSubheader>
++        {providers.map(provider => [
++          <ListSubheader key={`h-${provider}`} disableSticky style={styles.subheader}>
++            {provider}
++          </ListSubheader>,
++          ...byProvider[provider].map(m => {
++            const isCurrent =
++              m.id === currentModelId &&
++              (!current || !current.baseUrl || m.baseUrl === current.baseUrl);
++            return (
++              <MenuItem
++                key={`${provider}-${m.id}`}
++                selected={isCurrent}
++                onClick={() => selectModel(m)}
++              >
++                <div style={styles.menuItemContent}>
++                  <span>
++                    {m.name || m.id}
++                    {m.reasoning ? ' · reasoning' : ''}
++                  </span>
++                  {isCurrent ? <span style={styles.check}>✓</span> : null}
++                </div>
++              </MenuItem>
++            );
++          }),
++        ])}
++      </Menu>
++    </>
++  );
++};
+diff --git a/newIDE/app/src/AiGeneration/AiRequestChat/index.js b/newIDE/app/src/AiGeneration/AiRequestChat/index.js
+index 1ff9064..8693c5a 100644
+--- a/newIDE/app/src/AiGeneration/AiRequestChat/index.js
++++ b/newIDE/app/src/AiGeneration/AiRequestChat/index.js
+@@ -2,6 +2,7 @@
+ import * as React from 'react';
+ import useStableValue from '../../Utils/useStableValue';
+ import { exceptionallyGuardAgainstDeadObject } from '../../Utils/IsNullPtr';
++import { isLocalAiEnabled, getLocalAiMode } from '../../Profile/LocalAiUser';
+ import type { I18n as I18nType } from '@lingui/core';
+ import { ColumnStackLayout, LineStackLayout } from '../../UI/Layout';
+ import Text from '../../UI/Text';
+@@ -44,6 +45,7 @@ import {
+   getDefaultAiConfigurationPresetId,
+ } from '../AiConfiguration';
+ import { ReasoningLevelSelector } from './ReasoningLevelSelector';
++import { LocalAiModelSelector } from './LocalAiModelSelector';
+ import { AiRequestContext } from '../AiRequestContext';
+ import PreferencesContext from '../../MainFrame/Preferences/PreferencesContext';
+ import { useStickyVisibility } from './UseStickyVisibility';
+@@ -437,7 +439,11 @@ export const AiRequestChat: React.ComponentType<{
+       setAutomaticallyUseCreditsForAiRequests,
+       setAutomaticallyApplyAiRequestEditsForProjectId,
+     } = React.useContext(PreferencesContext);
+-    const selectedMode = 'orchestrator';
++    // Local provider (Phase 1) supports chat only; force chat mode so the
++    // orchestrator/agent tool loop (not yet implemented locally) is bypassed.
++    const selectedMode = isLocalAiEnabled()
++      ? getLocalAiMode()
++      : 'orchestrator';
+     const aiRequestId: string = aiRequest ? aiRequest.id : '';
+     const projectId = project ? project.getProjectUuid() : null;
+     // "Auto edit" defaults to on, unless the user turned it off for this project.
+@@ -1055,6 +1061,7 @@ export const AiRequestChat: React.ComponentType<{
+                         disabled={isWorking}
+                         showSelectedLabel={!hasOpenedProject}
+                       />
++                      <LocalAiModelSelector disabled={isWorking} />
+                     </LineStackLayout>
+                   )}
+                   <Column noMargin noOverflowParent>
+@@ -1268,6 +1275,7 @@ export const AiRequestChat: React.ComponentType<{
+                   disabled={isWorking}
+                   showSelectedLabel={!hasOpenedProject}
+                 />
++                <LocalAiModelSelector disabled={isWorking} />
+               </LineStackLayout>
+               <Column noMargin noOverflowParent>
+                 {isForAnotherProjectText || errorText || priceAndRequestsText}
+diff --git a/newIDE/app/src/AiGeneration/AskAiStandAloneForm.js b/newIDE/app/src/AiGeneration/AskAiStandAloneForm.js
+index 356364c..60e6f7a 100644
+--- a/newIDE/app/src/AiGeneration/AskAiStandAloneForm.js
++++ b/newIDE/app/src/AiGeneration/AskAiStandAloneForm.js
+@@ -10,6 +10,7 @@ import {
+ } from '../Utils/GDevelopServices/Generation';
+ import { delay } from '../Utils/Delay';
+ import AuthenticatedUserContext from '../Profile/AuthenticatedUserContext';
++import { isLocalAiEnabled, getLocalAiMode } from '../Profile/LocalAiUser';
+ import { makeSimplifiedProjectBuilder } from '../EditorFunctions/SimplifiedProject/SimplifiedProject';
+ import {
+   canUpgradeSubscription,
+@@ -189,7 +190,11 @@ export const AskAiStandAloneForm = ({
+   const [aiRequestIdForForm, setAiRequestIdForForm] = React.useState<
+     string | null
+   >(null);
+-  const aiRequestModeForForm = 'orchestrator'; // Standalone form is for orchestrator mode requests.
++  // Standalone form is for orchestrator mode requests; with a local provider we use
++  // the configured local mode (chat/agent) since orchestrator sub-agents aren't supported locally.
++  const aiRequestModeForForm = isLocalAiEnabled()
++    ? getLocalAiMode()
++    : 'orchestrator';
+   const aiRequestForForm =
+     (aiRequestIdForForm && aiRequests[aiRequestIdForForm]) || null;
+   const upToDateSelectedAiRequestId = useStableUpToDateRef(aiRequestIdForForm);
+diff --git a/newIDE/app/src/AiGeneration/Utils.js b/newIDE/app/src/AiGeneration/Utils.js
+index 8de71e9..4c30d78 100644
+--- a/newIDE/app/src/AiGeneration/Utils.js
++++ b/newIDE/app/src/AiGeneration/Utils.js
+@@ -17,6 +17,7 @@ import {
+   updateAiRequestMessage,
+ } from '../Utils/GDevelopServices/Generation';
+ import AuthenticatedUserContext from '../Profile/AuthenticatedUserContext';
++import { isLocalAiEnabled } from '../Profile/LocalAiUser';
+ import { processEditorFunctionCalls } from '../EditorFunctions/EditorFunctionCallRunner';
+ import {
+   type EditorCallbacks,
+@@ -1166,9 +1167,12 @@ export const useAiRequestState = ({
+           !hasUnfinishedResult &&
+           !hasPendingSubAgentCalls;
+         if (
+-          !shouldSaveVersionBeforeMessage &&
+-          !shouldSaveVersionAfterMessage &&
+-          !shouldSaveProjectAsAfterInitialization
++          // With a local AI provider there is no GDevelop cloud account, so skip all
++          // cloud project/version saves (they would fail and block the orchestrator).
++          isLocalAiEnabled() ||
++          (!shouldSaveVersionBeforeMessage &&
++            !shouldSaveVersionAfterMessage &&
++            !shouldSaveProjectAsAfterInitialization)
+         ) {
+           return;
+         }
+diff --git a/newIDE/app/src/MainFrame/EditorContainers/HomePage/PlaySection/UseGamesPlatformFrame.js b/newIDE/app/src/MainFrame/EditorContainers/HomePage/PlaySection/UseGamesPlatformFrame.js
+index 71a149c..8e5f97a 100644
+--- a/newIDE/app/src/MainFrame/EditorContainers/HomePage/PlaySection/UseGamesPlatformFrame.js
++++ b/newIDE/app/src/MainFrame/EditorContainers/HomePage/PlaySection/UseGamesPlatformFrame.js
+@@ -112,6 +112,8 @@ const useUserCustomToken = (): {|
+     () => {
+       (async () => {
+         if (!shouldRegenerateToken) return;
++        // Local AI provider: no GDevelop cloud account, so skip the games-platform token.
++        if (process.env.REACT_APP_LOCAL_AI === 'true') return;
+         if (!userId) {
+           clearStoredToken();
+           return;
+diff --git a/newIDE/app/src/MainFrame/EditorContainers/HomePage/UseCourses.js b/newIDE/app/src/MainFrame/EditorContainers/HomePage/UseCourses.js
+index 718ee2c..f0749a1 100644
+--- a/newIDE/app/src/MainFrame/EditorContainers/HomePage/UseCourses.js
++++ b/newIDE/app/src/MainFrame/EditorContainers/HomePage/UseCourses.js
+@@ -543,6 +543,8 @@ const useCourses = (): {
+         if (userStatus !== 'ready') {
+           return;
+         }
++        // Local AI provider: no GDevelop cloud account, so skip the (doomed) course fetch.
++        if (process.env.REACT_APP_LOCAL_AI === 'true') return;
+ 
+         console.info(`Fetching all courses for userId=${userId || 'null'}.`);
+ 
+diff --git a/newIDE/app/src/Profile/AuthenticatedUserProvider.js b/newIDE/app/src/Profile/AuthenticatedUserProvider.js
+index 3934e89..c1128a3 100644
+--- a/newIDE/app/src/Profile/AuthenticatedUserProvider.js
++++ b/newIDE/app/src/Profile/AuthenticatedUserProvider.js
+@@ -39,6 +39,7 @@ import AuthenticatedUserContext, {
+   authenticatedUserLoggedOutAttributes,
+   authenticatedUserPropertiesLoadingState,
+ } from './AuthenticatedUserContext';
++import { applyLocalAiUserOverride } from './LocalAiUser';
+ import CreateAccountDialog from './CreateAccountDialog';
+ import EditProfileDialog from './EditProfileDialog';
+ import ChangeEmailDialog from './ChangeEmailDialog';
+@@ -1759,7 +1760,9 @@ export default class AuthenticatedUserProvider extends React.Component<
+ 
+   render(): any {
+     return (
+-      <AuthenticatedUserContext.Provider value={this.state.authenticatedUser}>
++      <AuthenticatedUserContext.Provider
++        value={applyLocalAiUserOverride(this.state.authenticatedUser)}
++      >
+         {this.props.children}
+         {this.state.loginDialogOpen && (
+           <LoginDialog
+diff --git a/newIDE/app/src/Profile/LocalAiUser.js b/newIDE/app/src/Profile/LocalAiUser.js
+new file mode 100644
+index 0000000..b88c42d
+--- /dev/null
++++ b/newIDE/app/src/Profile/LocalAiUser.js
+@@ -0,0 +1,142 @@
++// @flow
++// Local AI provider support (Phase 1 of the provider-agnostic AI work).
++//
++// When the app is built/started with REACT_APP_LOCAL_AI=true, GDevelop's "Ask AI"
++// feature is routed to a local OpenAI-compatible proxy (see
++// REACT_APP_GENERATION_API_URL and ../Utils/GDevelopServices/ApiConfigs.js).
++// That feature is gated behind a logged-in GDevelop account: every send path
++// early-returns when `profile` is falsy and calls `getAuthorizationHeader()`.
++// To use the local provider WITHOUT a real GDevelop cloud account, we present a
++// synthetic authenticated user to the React tree. We override only the outgoing
++// AuthenticatedUserContext value — the provider's internal state stays logged-out,
++// so it never attempts real authenticated cloud fetches. `limits` is left null so
++// the credit/quota gate is skipped (requests are sent as free).
++
++export const isLocalAiEnabled = (): boolean =>
++  !!process.env.REACT_APP_LOCAL_AI &&
++  process.env.REACT_APP_LOCAL_AI !== 'false' &&
++  process.env.REACT_APP_LOCAL_AI !== '0';
++
++// Which mode the local provider runs in. 'chat' (Phase 1, default) is plain Q&A;
++// 'agent' (Phase 3) lets the model call EditorFunctions tools to edit the project.
++// 'orchestrator' (Phase 4, sub-agents) is not implemented locally — treated as agent.
++export const getLocalAiMode = (): 'chat' | 'agent' | 'orchestrator' => {
++  const m = (process.env.REACT_APP_LOCAL_AI_MODE || 'chat').toLowerCase();
++  return m === 'agent' || m === 'orchestrator' ? m : 'chat';
++};
++
++// A minimal Profile-shaped object. Only `id` is load-bearing (it becomes the
++// `userId` sent to the generation API); the rest keeps profile-reading UI happy.
++const localAiProfile = {
++  id: 'local-ai-user',
++  email: 'local-ai@localhost',
++  username: 'Local AI',
++  description: null,
++  getGameStatsEmail: false,
++  getNewsletterEmail: false,
++  isCreator: true,
++  isPlayer: false,
++  createdAt: 0,
++  updatedAt: 0,
++  appLanguage: 'en',
++  donateLink: null,
++  discordUsername: null,
++  communityLinks: {},
++  survey: null,
++};
++
++// A fully-permissive `limits` object. The real GDevelop cloud derives a user's
++// capabilities/quotas from their subscription; with the local provider there is no
++// subscription, so we present the most generous capability set. This satisfies every
++// `limits.capabilities.*` gate at once (leaderboard theming/CSS/login-toggle, multiplayer
++// player count UI, version-history flags, etc.) and makes capability caps "unlimited"
++// (-1 is the codebase's unlimited sentinel).
++//
++// Deliberately omitted keys:
++//  - `classrooms`: all its flags are *hide* flags for student accounts; omitting it keeps
++//    everything visible (the one *show* flag gates a cloud-only tab, correctly left off).
++//  - `privateTutorials`: gates GDevelop-hosted content that isn't available offline.
++//
++// IMPORTANT: keep `quotas: {}` and `prices: {}` (no `consumed-ai-credits` quota). The free
++// "Ask AI" send path depends on the AI-credits quota lookup being absent (so it never reads
++// as limit-reached). Adding a consumed-ai-credits quota here would re-introduce the AI block.
++const localAiLimits = {
++  capabilities: {
++    analytics: {
++      sessions: true,
++      players: true,
++      retention: true,
++      sessionsTimeStats: true,
++      platforms: true,
++    },
++    cloudProjects: {
++      maximumCount: -1,
++      canMaximumCountBeIncreased: false,
++      maximumGuestCollaboratorsPerProject: -1,
++    },
++    leaderboards: {
++      maximumCountPerGame: -1,
++      canMaximumCountPerGameBeIncreased: false,
++      themeCustomizationCapabilities: 'FULL',
++      canUseCustomCss: true,
++      canDisableLoginInLeaderboard: true,
++    },
++    multiplayer: {
++      lobbiesCount: -1,
++      maxPlayersPerLobby: 8,
++      themeCustomizationCapabilities: 'FULL',
++    },
++    versionHistory: { enabled: true, retentionDays: -1 },
++    ai: { availablePresets: [], versionHistory: { retentionDays: -1 } },
++  },
++  quotas: {},
++  credits: {
++    userBalance: { amount: 1000000 },
++    prices: {},
++    purchasableQuantities: {},
++  },
++  message: undefined,
++};
++
++// A synthetic subscription so subscription-gated client features unlock and no "manage
++// subscription / upgrade" buttons (which would hit the cloud) are shown:
++//  - planId set            => hasValidSubscriptionPlan() true
++//  - 'gdevelop_startup'    => canUpgradeSubscription() false (top tier)
++//  - 'MANUALLY_ADDED'      => hasSubscriptionBeenManuallyAdded() true (hides portal redirect)
++const localAiSubscription = {
++  userId: 'local-ai-user',
++  planId: 'gdevelop_startup',
++  pricingSystemId: 'MANUALLY_ADDED',
++  createdAt: 0,
++  updatedAt: 0,
++};
++
++// Applied to the AuthenticatedUserContext value before it is provided. If a real
++// user is already authenticated, it is left untouched.
++//
++// We intentionally provide `profile` + `getAuthorizationHeader` but keep
++// `authenticated: false` and `firebaseUser: null`. The "Ask AI" feature gates only
++// on `profile` (e.g. AskAiEditorContainer `if (!profile)`), so this is enough to
++// enable it. Meanwhile cloud features (game list, custom auth token, etc.) gate on
++// `authenticated && firebaseUser` and stay dormant — so faking the AI user does NOT
++// trigger doomed authenticated calls to the real GDevelop API (which would surface
++// as uncaught network errors / the dev error overlay).
++//
++// We also inject permissive `limits` + a synthetic `subscription` so the premium gates
++// that are purely client-side unlock. The provider's own fetch effects key off its
++// internal (logged-out) state and only run when `firebaseUser` is set, so these injected
++// objects are never overwritten and never trigger cloud calls.
++export const applyLocalAiUserOverride = (base: any): any => {
++  if (!isLocalAiEnabled()) return base;
++  if (base && base.authenticated && base.profile) return base;
++  return {
++    ...base,
++    authenticated: false,
++    firebaseUser: null,
++    loginState: 'done',
++    profile: localAiProfile,
++    limits: localAiLimits,
++    subscription: localAiSubscription,
++    getAuthorizationHeader: async () => 'Bearer local-ai-dev',
++  };
++};
+diff --git a/newIDE/app/src/Utils/GDevelopServices/ApiConfigs.js b/newIDE/app/src/Utils/GDevelopServices/ApiConfigs.js
+index cc52e67..c76a9c2 100644
+--- a/newIDE/app/src/Utils/GDevelopServices/ApiConfigs.js
++++ b/newIDE/app/src/Utils/GDevelopServices/ApiConfigs.js
+@@ -109,9 +109,13 @@ export const GDevelopProjectApi = {
+ };
+ 
+ export const GDevelopGenerationApi = {
+-  baseUrl: ((isDev
+-    ? 'https://api-dev.gdevelop.io/generation'
+-    : 'https://api.gdevelop.io/generation'): string),
++  // The Generation (AI) API base URL. Overridable via REACT_APP_GENERATION_API_URL
++  // to route all AI requests to a local OpenAI-compatible proxy (provider-agnostic
++  // AI work — see ../../Profile/LocalAiUser.js and the ai-proxy server).
++  baseUrl: ((process.env.REACT_APP_GENERATION_API_URL ||
++    (isDev
++      ? 'https://api-dev.gdevelop.io/generation'
++      : 'https://api.gdevelop.io/generation')): string),
+ };
+ 
+ export const GDevelopAiCdn = {
+diff --git a/newIDE/app/src/Utils/GDevelopServices/Usage.js b/newIDE/app/src/Utils/GDevelopServices/Usage.js
+index ae66cd1..82dca58 100644
+--- a/newIDE/app/src/Utils/GDevelopServices/Usage.js
++++ b/newIDE/app/src/Utils/GDevelopServices/Usage.js
+@@ -9,6 +9,7 @@ import {
+ } from '../i18n/MessageByLocale';
+ import { extractGDevelopApiErrorStatusAndCode } from './Errors';
+ import { isNativeMobileApp } from '../Platform';
++import { isLocalAiEnabled } from '../../Profile/LocalAiUser';
+ import {
+   ensureIsArray,
+   ensureIsObjectOrNull,
+@@ -575,6 +576,12 @@ export const isSubscriptionComingFromTeam = (
+ export const hasValidSubscriptionPlan = (
+   subscription: ?Subscription
+ ): boolean => {
++  // Local AI provider: the user runs their own LLM with no GDevelop subscription, so
++  // treat them as fully subscribed — this unlocks every purely-client subscription gate
++  // (loading-screen branding removal, Wi-Fi/LAN preview, hot-reload/debugger nudges, the
++  // premium crown, and the "upgrade" upsell cards). Cloud-backed features still need cloud.
++  if (isLocalAiEnabled()) return true;
++
+   const hasValidSubscription =
+     !!subscription &&
+     !!subscription.planId &&
+@@ -750,6 +757,9 @@ export const canBenefitFromSocialRole = (
+ export const canUpgradeSubscription = (
+   subscription: ?Subscription
+ ): false | true | boolean => {
++  // Local AI provider is treated as already on the top plan — hide all "upgrade" prompts.
++  if (isLocalAiEnabled()) return false;
++
+   return (
+     !!subscription &&
+     // $FlowFixMe[incompatible-type]

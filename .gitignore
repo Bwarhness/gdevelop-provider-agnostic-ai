@@ -1,0 +1,21 @@
+# The full GDevelop source is a clone of 4ian/GDevelop — not redistributed here.
+# The integration is shipped as a patch + file copies under gdevelop-integration/.
+/GDevelop/
+
+# Local Claude Code settings + memory (machine-specific, not for publishing).
+/.claude/
+
+# Dependencies / build output
+node_modules/
+dist/
+build/
+
+# Proxy runtime secrets & state (also ignored by ai-proxy/.gitignore)
+ai-proxy/.env
+ai-proxy/config.json
+ai-proxy/test/test-config.json
+
+# Logs / scratch
+*.log
+.DS_Store
+Thumbs.db
