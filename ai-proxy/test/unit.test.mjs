@@ -1,6 +1,8 @@
 // Unit tests for the pure proxy modules. Run with: npm test  (node --test)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { fileURLToPath } from 'node:url';
+const CATALOG_PATH = fileURLToPath(new URL('../src/instruction-catalog.json', import.meta.url));
 import {
   makeUserMessage,
   makeAssistantMessage,
@@ -13,6 +15,7 @@ import {
   buildInstructionReference,
   buildEventsUserPrompt,
   loadCatalog,
+  validateEvents,
 } from '../src/events.js';
 import { DELEGATION_TOOLS, ORCHESTRATOR_TOOLS, readOnlyTools, safeJsonParse, READ_ONLY_TOOL_NAMES } from '../src/orchestrator.js';
 
@@ -128,6 +131,39 @@ test('buildEventsUserPrompt includes description + catalog marker', () => {
   assert.ok(p.includes('jump on space'));
   assert.ok(p.includes('CATALOG'));
   assert.ok(p.includes('{"events"'));
+});
+
+test('validateEvents: clean events against the real catalog -> no problems', () => {
+  loadCatalog(CATALOG_PATH);
+  const events = [
+    {
+      type: 'BuiltinCommonInstructions::Standard',
+      conditions: [{ type: { value: 'KeyFromTextPressed' }, parameters: ['', 'Space'] }],
+      actions: [{ type: { value: 'PlatformBehavior::SimulateJumpKey' }, parameters: ['Player', 'Platformer'] }],
+    },
+  ];
+  assert.deepEqual(validateEvents(events), []);
+});
+
+test('validateEvents: unknown type, kind mix-up, too many params are flagged', () => {
+  loadCatalog(CATALOG_PATH);
+  const problems = validateEvents([
+    {
+      type: 'BuiltinCommonInstructions::Standard',
+      conditions: [{ type: { value: 'PlatformBehavior::SimulateJumpKey' }, parameters: ['Player', 'Platformer'] }], // action used as condition
+      actions: [
+        { type: { value: 'NoSuchInstruction::Nope' }, parameters: [] }, // unknown type
+        { type: { value: 'PlatformBehavior::SimulateJumpKey' }, parameters: ['Player', 'Platformer', 'extra', 'more'] }, // too many
+      ],
+    },
+  ]);
+  assert.ok(problems.some(p => /not a condition/i.test(p)));
+  assert.ok(problems.some(p => /unknown instruction type/i.test(p)));
+  assert.ok(problems.some(p => /too many parameters/i.test(p)));
+});
+
+test('validateEvents: non-array input is reported, not thrown', () => {
+  assert.ok(validateEvents(null).length > 0);
 });
 
 // ---------- orchestrator.js ----------

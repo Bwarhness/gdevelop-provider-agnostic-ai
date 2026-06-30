@@ -32,6 +32,7 @@ import {
   buildEventsUserPrompt,
   parseEventsFromLLM,
   placementToOperation,
+  validateEvents,
 } from './events.js';
 import { CONFIG_UI_HTML } from './configUi.js';
 import {
@@ -550,17 +551,62 @@ function resolveBlob(inline, key) {
   return null;
 }
 
+// Events generation is the hardest structured task in the pipeline, so it runs at a
+// real reasoning effort and with a validate→repair loop: the generated events are checked
+// against the instruction catalog (unknown types, condition/action mix-ups, wrong arity)
+// and, on a parse or validation failure, the model is handed the precise problems and
+// asked to fix them (AXI-style structured, definitive feedback) — a couple of rounds.
+// 'low' keeps the common (valid-first-shot) case fast — the rich catalog reference carries
+// correctness; the repair loop only adds calls when there's an actual problem to fix.
+const EVENTS_REASONING_EFFORT = process.env.EVENTS_REASONING_EFFORT || 'low';
+const EVENTS_MAX_REPAIRS = parseInt(process.env.EVENTS_MAX_REPAIRS || '1', 10);
+
 async function generateOneEventsBatch({ description, objectsList, existingEventsAsText, gameProjectJson }) {
   const userPrompt = buildEventsUserPrompt({ description, objectsList, existingEventsAsText, gameProjectJson });
   const messages = [
     { role: 'system', content: EVENTS_SYSTEM_PROMPT },
     { role: 'user', content: userPrompt },
   ];
-  const completion = await callProvider(messages, null);
-  const text = (completion.choices[0].message && completion.choices[0].message.content) || '';
-  const events = parseEventsFromLLM(text);
-  if (!events) throw new Error('Could not parse events JSON from model output');
-  return events;
+
+  // Track the best (fewest catalog problems) PARSED attempt. We never hard-fail when we have
+  // *something* parseable: best-effort events are handed to the IDE, whose WASM validation is
+  // authoritative — it flags any residual bad instruction in the diagnostic report, which the
+  // "Fix with AI" button can then clean up. We only throw if nothing parsed at all.
+  let best = null; // { events, problems }
+  for (let attempt = 0; attempt <= EVENTS_MAX_REPAIRS; attempt++) {
+    const completion = await callProvider(messages, null, EVENTS_REASONING_EFFORT);
+    const text = (completion.choices[0].message && completion.choices[0].message.content) || '';
+    const events = parseEventsFromLLM(text);
+    const problems = events
+      ? validateEvents(events)
+      : ['Output was not valid JSON. Return ONLY {"events": [...]} with no prose or markdown fences.'];
+
+    if (events && problems.length === 0) {
+      if (attempt > 0) log(`events generation: clean after ${attempt} repair round(s)`);
+      return events;
+    }
+    if (events && (!best || problems.length < best.problems.length)) best = { events, problems };
+
+    if (attempt < EVENTS_MAX_REPAIRS) {
+      log(`events generation: ${problems.length} problem(s), repairing (round ${attempt + 1})`);
+      messages.push({ role: 'assistant', content: text });
+      messages.push({
+        role: 'user',
+        content:
+          `Your events have these problems:\n- ${problems.slice(0, 20).join('\n- ')}\n\n` +
+          `Fix ONLY the offending instructions by choosing a valid type from the CATALOG above (respect [c]/[a] and the slot list). ` +
+          `KEEP every piece of requested logic — do NOT delete events or drop requirements to make a problem go away. ` +
+          `Return the complete corrected {"events": [...]} only.`,
+      });
+    }
+  }
+
+  if (best) {
+    if (best.problems.length)
+      log(`events generation: returning best-effort with ${best.problems.length} unresolved problem(s) — IDE will flag them`);
+    return best.events;
+  }
+  throw new Error('Could not parse events JSON from the model output');
 }
 
 function emptyChangeExtras() {

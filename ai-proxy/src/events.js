@@ -6,43 +6,143 @@
 import { readFileSync, existsSync } from 'fs';
 
 let CATALOG = [];
+let CATALOG_INDEX = new Map(); // type.value -> { kinds:Set, entries:[entry...] }
 export function loadCatalog(path) {
   try {
     if (existsSync(path)) CATALOG = JSON.parse(readFileSync(path, 'utf8'));
   } catch (e) {
     /* ignore */
   }
+  CATALOG_INDEX = new Map();
+  for (const entry of CATALOG) {
+    if (!entry || !entry.type) continue;
+    let rec = CATALOG_INDEX.get(entry.type);
+    if (!rec) {
+      rec = { kinds: new Set(), entries: [] };
+      CATALOG_INDEX.set(entry.type, rec);
+    }
+    rec.kinds.add(entry.kind);
+    rec.entries.push(entry);
+  }
   return CATALOG.length;
+}
+
+// Validate generated events against the catalog. Returns an array of human-readable
+// problem strings (empty = valid). Catches the gross errors that otherwise reach the IDE
+// as red-underlined instructions: unknown types, condition/action mix-ups, wrong arity.
+export function validateEvents(events, path = 'events') {
+  const problems = [];
+  if (!Array.isArray(events)) {
+    return [`${path}: expected an array of event objects`];
+  }
+  events.forEach((ev, i) => {
+    if (!ev || typeof ev !== 'object') {
+      problems.push(`${path}[${i}]: not an object`);
+      return;
+    }
+    const checkList = (list, kind) => {
+      if (list == null) return;
+      if (!Array.isArray(list)) {
+        problems.push(`${path}[${i}].${kind}s: must be an array`);
+        return;
+      }
+      list.forEach((instr, j) => {
+        const loc = `${path}[${i}].${kind}s[${j}]`;
+        const typeValue = instr && instr.type && instr.type.value;
+        if (!typeValue) {
+          problems.push(`${loc}: missing type.value`);
+          return;
+        }
+        const rec = CATALOG_INDEX.get(typeValue);
+        if (!rec) {
+          problems.push(`${loc}: unknown instruction type "${typeValue}" (not in catalog)`);
+          return;
+        }
+        if (!rec.kinds.has(kind)) {
+          const has = [...rec.kinds].join('/');
+          problems.push(`${loc}: "${typeValue}" is a ${has}, not a ${kind}. Use it under "${has}s" instead.`);
+          return;
+        }
+        const entry = rec.entries.find(e => e.kind === kind) || rec.entries[0];
+        const max = (entry.params || []).length;
+        const got = Array.isArray(instr.parameters) ? instr.parameters.length : -1;
+        // Only flag "too many" (unambiguously wrong) — too-few may be legit omitted
+        // optionals and is caught more precisely by the IDE's WASM validation.
+        if (got < 0) {
+          problems.push(`${loc} ("${typeValue}"): "parameters" must be an array`);
+        } else if (got > max) {
+          problems.push(
+            `${loc} ("${typeValue}"): too many parameters (${got} given, ${max} slots). Slots: ${describeSlots(entry)}`
+          );
+        }
+      });
+    };
+    checkList(ev.conditions, 'condition');
+    checkList(ev.actions, 'action');
+    if (ev.events) problems.push(...validateEvents(ev.events, `${loc(path, i)}.events`));
+  });
+  return problems;
+}
+function loc(path, i) {
+  return `${path}[${i}]`;
 }
 
 // Build a compact instruction reference relevant to the scene. Includes free
 // (global) instructions, base-object + Sprite instructions, and behavior
 // instructions for any behavior type referenced in the project JSON.
-export function buildInstructionReference(gameProjectJson) {
-  const projStr = gameProjectJson || '';
+export function buildInstructionReference(gameProjectJson, objectsList = '') {
+  const projStr = `${gameProjectJson || ''}\n${objectsList || ''}`;
+  const hasContext = projStr.trim().length > 0;
   const relevant = CATALOG.filter(i => {
     if (i.scope === 'free') return true;
-    if (i.scope === 'object:base' || i.scope === 'object:Sprite') return true;
+    if (i.scope === 'object:base') return true;
+    if (i.scope.startsWith('object:')) {
+      // Object-type instructions (e.g. Text's "Change the text") for object types present
+      // in the scene. Without context, include the common ones so basics still work.
+      const ot = i.scope.slice('object:'.length);
+      return hasContext ? projStr.includes(ot) : ot === 'Sprite' || ot === 'TextObject::Text';
+    }
     if (i.scope.startsWith('behavior:')) {
       const bt = i.scope.slice('behavior:'.length);
+      // Capability behaviors (text, effects, opacity, scale, flip, …) are implicit on the
+      // objects that support them, so always offer them; other behaviors only if referenced.
+      if (/Capability/.test(bt)) return true;
       return projStr.includes(bt);
     }
     return false;
   });
+  // AXI-style: high-signal, token-efficient. Each line carries what the instruction DOES
+  // (its sentence, with _PARAM0_ markers mapping meaning to slot position) plus the typed
+  // slots — so the model can pick the right type and fill params correctly, not guess.
+  //   <type> [c|a] <sentence> :: <slots>
   const fmt = i => {
-    const slots = i.params
-      .map((p, idx) => {
-        if (p.codeOnly) return `${idx}:""`;
-        let s = `${idx}:<${p.type}`;
-        if (p.extraInfo) s += `=${p.extraInfo}`;
-        s += '>';
-        return s;
-      })
-      .join(' ');
-    return `${i.kind} ${i.type} | params: [${slots}]`;
+    const tag = i.kind === 'condition' ? 'c' : 'a';
+    const sentence = cleanSentence(i.sentence) || cleanSentence(i.fullName) || '';
+    return `${i.type} [${tag}]${sentence ? ' ' + sentence : ''} :: ${describeSlots(i)}`;
   };
-  // Cap to keep the prompt bounded; free + base/sprite + scene behaviors is usually < 500.
   return relevant.map(fmt).join('\n');
+}
+
+// Collapse whitespace/newlines and cap length so one instruction = one tidy line.
+function cleanSentence(s) {
+  if (!s) return '';
+  return String(s).replace(/\s+/g, ' ').trim().slice(0, 120);
+}
+
+// Compact, typed description of an instruction's parameter slots (shared by the reference
+// and validation error messages). codeOnly slots are shown as "" (the model must pass "").
+export function describeSlots(entry) {
+  const params = entry.params || [];
+  if (!params.length) return '(no params)';
+  return params
+    .map((p, idx) => {
+      if (p.codeOnly) return `${idx}:""`;
+      let s = `${idx}:${p.type}`;
+      if (p.extraInfo) s += `=${p.extraInfo}`;
+      if (p.optional) s += '?';
+      return s;
+    })
+    .join(' ');
 }
 
 export const EVENTS_SYSTEM_PROMPT = `You generate GDevelop game logic as SERIALIZED EVENTS JSON. You will be given a natural-language description of the logic to add, the scene's objects (with their behaviors), and a CATALOG of the exact instruction types you may use.
@@ -59,8 +159,15 @@ EVENT object shape:
 INSTRUCTION shape:
 { "type": { "value": "<EXACT_TYPE_FROM_CATALOG>" }, "parameters": [ "<p0>", "<p1>", ... ] }
 
+CATALOG format — each line is one instruction:
+  <TYPE> [c|a] <what it does, with _PARAM0_/_PARAM1_ marking where each parameter goes> :: <slots>
+  * [c] = usable as a CONDITION, [a] = usable as an ACTION. A type may appear as both.
+  * <slots> lists each parameter slot as "index:type" in order, e.g. "0:object 1:behavior=PlatformBehavior::PlatformerObjectBehavior 2:expression". A "?" suffix means the slot is optional (may be omitted). A slot shown as i:"" is code-only — pass "".
+  Read the sentence to understand the instruction and which value each slot expects (it names _PARAM0_, _PARAM1_, … in place).
+
 CRITICAL RULES:
-- Use ONLY 'type.value' strings listed in the CATALOG. Conditions must come from 'condition' entries, actions from 'action' entries.
+- Use ONLY 'type.value' strings listed in the CATALOG. Use a type as a condition only if its line shows [c]; as an action only if it shows [a].
+- Pick the instruction whose sentence MATCHES the intent. Do NOT invent types or reuse a remembered name that is not in the CATALOG. To change a Text object's displayed text use the action whose sentence is about the object's text, NOT a "variable" action.
 - The "parameters" array MUST have exactly one string per param slot shown for that instruction, IN ORDER.
   * A slot shown as i:"" is code-only — put an empty string "".
   * <object> → the object's name (from the scene objects list).
@@ -75,13 +182,13 @@ CRITICAL RULES:
 
 // Build the user prompt for one events-generation request.
 export function buildEventsUserPrompt({ description, objectsList, existingEventsAsText, gameProjectJson }) {
-  const reference = buildInstructionReference(gameProjectJson);
+  const reference = buildInstructionReference(gameProjectJson, objectsList);
   let prompt = `Add this game logic to the scene:\n"${description}"\n\n`;
   if (objectsList) prompt += `Scene objects (name:type and behaviors): ${objectsList}\n`;
   if (gameProjectJson) prompt += `\nScene/project JSON (for object types, behavior names, variables):\n${gameProjectJson}\n`;
   if (existingEventsAsText && existingEventsAsText.trim())
     prompt += `\nExisting events (do not duplicate):\n${existingEventsAsText}\n`;
-  prompt += `\nCATALOG of allowed instructions (type | param slots):\n${reference}\n`;
+  prompt += `\nCATALOG of allowed instructions — "<TYPE> [c|a] <what it does> :: <slots>":\n${reference}\n`;
   prompt += `\nReturn {"events": [...]} now.`;
   return prompt;
 }
