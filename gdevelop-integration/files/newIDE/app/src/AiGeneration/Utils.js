@@ -1362,15 +1362,18 @@ export const useAiRequestState = ({
   };
 };
 
+export type NewAiRequestOptions = {|
+  mode: 'chat' | 'agent' | 'orchestrator',
+  userRequest: string,
+  aiConfigurationPresetId: string,
+|};
+
 // If any of those props is undefined, the previous value is kept.
 export type OpenAskAiOptions = {|
   aiRequestId?: string | null, // If null, a new request will be created.
   paneIdentifier?: 'left' | 'center' | 'right',
   continueProcessingFunctionCallsOnMount?: boolean,
-|};
-
-export type NewAiRequestOptions = {|
-  mode: 'chat' | 'agent' | 'orchestrator',
-  userRequest: string,
-  aiConfigurationPresetId: string,
+  // If set, a brand-new AI request is created and sent on open (e.g. the
+  // "Fix with AI" button on the diagnostic report passes the problems here).
+  newRequest?: NewAiRequestOptions,
 |};

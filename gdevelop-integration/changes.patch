@@ -317,6 +317,71 @@ index 1ff9064..8693c5a 100644
                </LineStackLayout>
                <Column noMargin noOverflowParent>
                  {isForAnotherProjectText || errorText || priceAndRequestsText}
+diff --git a/newIDE/app/src/AiGeneration/AskAiEditorContainer.js b/newIDE/app/src/AiGeneration/AskAiEditorContainer.js
+index 8deb0b2..6ef22b9 100644
+--- a/newIDE/app/src/AiGeneration/AskAiEditorContainer.js
++++ b/newIDE/app/src/AiGeneration/AskAiEditorContainer.js
+@@ -213,7 +213,9 @@ export type AskAiEditorInterface = {|
+   selectAllInsideEditor: () => void,
+   startOrOpenChat: (
+     ?{|
+-      aiRequestId: string | null,
++      aiRequestId?: string | null,
++      // If set, immediately create and send a brand-new AI request.
++      newRequest?: NewAiRequestOptions,
+     |}
+   ) => void,
+   notifyChangesToInGameEditor: (hotReloadSteps: HotReloadSteps) => void,
+@@ -958,16 +960,28 @@ export const AskAiEditor: React.ComponentType<Props> = React.memo<Props>(
+       const onStartOrOpenChat = React.useCallback(
+         (
+           options: ?{|
+-            aiRequestId: string | null,
++            aiRequestId?: string | null,
++            newRequest?: NewAiRequestOptions,
+           |}
+         ) => {
+           if (!options) return;
+-          const { aiRequestId } = options;
++          const { aiRequestId, newRequest } = options;
++          // newRequest => start a fresh chat and immediately send that request;
++          // otherwise just select/open the given request (aiRequestId, possibly null).
++          const proceed = () => {
++            if (newRequest) {
++              setSelectedAiRequestId(null);
++              startNewAiRequest(newRequest);
++            } else {
++              setSelectedAiRequestId(aiRequestId || null);
++            }
++          };
++          const targetAiRequestId = newRequest ? null : aiRequestId;
+           // When navigating away from a working request, ask the user to confirm
+           // stopping it (or to cancel). Unlike closing the editor, we do NOT
+           // offer to keep it running in the background here: a request you have
+           // navigated away from while opening another chat would be confusing.
+-          if (selectedAiRequest && aiRequestId !== selectedAiRequest.id) {
++          if (selectedAiRequest && targetAiRequestId !== selectedAiRequest.id) {
+             // upToDateConfirmStopping is declared below this callback, but it is
+             // only ever called at event-handler time (post-render), so it is
+             // always initialised by the time this runs.
+@@ -978,14 +992,14 @@ export const AskAiEditor: React.ComponentType<Props> = React.memo<Props>(
+                 message: t`The AI is currently working on your project. Opening another chat will stop it. Do you want to continue?`,
+               })
+               .then(shouldProceed => {
+-                if (shouldProceed) setSelectedAiRequestId(aiRequestId);
++                if (shouldProceed) proceed();
+               });
+             return;
+           }
+-          setSelectedAiRequestId(aiRequestId);
++          proceed();
+         },
+         // eslint-disable-next-line react-hooks/exhaustive-deps
+-        [setSelectedAiRequestId, selectedAiRequest]
++        [setSelectedAiRequestId, selectedAiRequest, startNewAiRequest]
+       );
+       const onStartNewChat = React.useCallback(
+         () => {
 diff --git a/newIDE/app/src/AiGeneration/AskAiStandAloneForm.js b/newIDE/app/src/AiGeneration/AskAiStandAloneForm.js
 index 356364c..60e6f7a 100644
 --- a/newIDE/app/src/AiGeneration/AskAiStandAloneForm.js
@@ -343,7 +408,7 @@ index 356364c..60e6f7a 100644
      (aiRequestIdForForm && aiRequests[aiRequestIdForForm]) || null;
    const upToDateSelectedAiRequestId = useStableUpToDateRef(aiRequestIdForForm);
 diff --git a/newIDE/app/src/AiGeneration/Utils.js b/newIDE/app/src/AiGeneration/Utils.js
-index 8de71e9..4c30d78 100644
+index 8de71e9..9b387b9 100644
 --- a/newIDE/app/src/AiGeneration/Utils.js
 +++ b/newIDE/app/src/AiGeneration/Utils.js
 @@ -17,6 +17,7 @@ import {
@@ -370,6 +435,256 @@ index 8de71e9..4c30d78 100644
          ) {
            return;
          }
+@@ -1358,15 +1362,18 @@ export const useAiRequestState = ({
+   };
+ };
+ 
++export type NewAiRequestOptions = {|
++  mode: 'chat' | 'agent' | 'orchestrator',
++  userRequest: string,
++  aiConfigurationPresetId: string,
++|};
++
+ // If any of those props is undefined, the previous value is kept.
+ export type OpenAskAiOptions = {|
+   aiRequestId?: string | null, // If null, a new request will be created.
+   paneIdentifier?: 'left' | 'center' | 'right',
+   continueProcessingFunctionCallsOnMount?: boolean,
+-|};
+-
+-export type NewAiRequestOptions = {|
+-  mode: 'chat' | 'agent' | 'orchestrator',
+-  userRequest: string,
+-  aiConfigurationPresetId: string,
++  // If set, a brand-new AI request is created and sent on open (e.g. the
++  // "Fix with AI" button on the diagnostic report passes the problems here).
++  newRequest?: NewAiRequestOptions,
+ |};
+diff --git a/newIDE/app/src/ExportAndShare/DiagnosticReportDialog.js b/newIDE/app/src/ExportAndShare/DiagnosticReportDialog.js
+index 6c78f8e..70ea485 100644
+--- a/newIDE/app/src/ExportAndShare/DiagnosticReportDialog.js
++++ b/newIDE/app/src/ExportAndShare/DiagnosticReportDialog.js
+@@ -5,6 +5,7 @@ import Text from '../UI/Text';
+ import Toggle from '../UI/Toggle';
+ import { ColumnStackLayout, LineStackLayout } from '../UI/Layout';
+ import Dialog, { DialogPrimaryButton } from '../UI/Dialog';
++import FlatButton from '../UI/FlatButton';
+ import { mapFor } from '../Utils/MapFor';
+ import {
+   Table,
+@@ -216,6 +217,9 @@ type Props = {|
+   project: gdProject,
+   wholeProjectDiagnosticReport: gdWholeProjectDiagnosticReport,
+   onClose: () => void,
++  // If provided, a "Fix with AI" button is shown when there are issues. It receives a
++  // ready-to-send description of all the problems for the Ask AI agent to fix.
++  onFixWithAi?: (userRequest: string) => void,
+   onNavigateToLayoutEvent: (layoutName: string, eventPath: EventPath) => void,
+   onNavigateToExternalEventsEvent: (
+     externalEventsName: string,
+@@ -243,6 +247,7 @@ export default function DiagnosticReportDialog({
+   project,
+   wholeProjectDiagnosticReport,
+   onClose,
++  onFixWithAi,
+   onNavigateToLayoutEvent,
+   onNavigateToExternalEventsEvent,
+   onNavigateToExtensionEvent,
+@@ -499,6 +504,170 @@ export default function DiagnosticReportDialog({
+     [gdevelopTheme.list.itemsBackgroundColor]
+   );
+ 
++  // Compose a plain-text description of every problem for the Ask AI agent to fix.
++  const handleFixWithAi = React.useCallback(
++    () => {
++      if (!onFixWithAi) return;
++      const sections = [];
++
++      // Missing actions/conditions/expressions, grouped by extension.
++      if (groupedErrors.missingInstructions.size > 0) {
++        const lines = [];
++        for (const [
++          extensionName,
++          errors,
++        ] of groupedErrors.missingInstructions.entries()) {
++          const names = [
++            ...new Set(
++              errors.map(e => renderMissingInstructionName(e.instructionType))
++            ),
++          ];
++          const locations = [
++            ...new Set(errors.map(e => `${e.locationType} "${e.locationName}"`)),
++          ];
++          lines.push(
++            `- Extension "${extensionName}": ${names.join(
++              ', '
++            )} (used in ${locations.join(', ')})`
++          );
++        }
++        sections.push(
++          '## Missing actions/conditions/expressions (they no longer exist in their extensions — update or remove them)\n' +
++            lines.join('\n')
++        );
++      }
++
++      // Invalid parameters in events.
++      const invalidParameterErrors = validationErrors.filter(
++        e => e.type !== 'missing-instruction'
++      );
++      if (invalidParameterErrors.length > 0) {
++        const lines = invalidParameterErrors.map(
++          e =>
++            `- ${e.locationType} "${e.locationName}": ${
++              e.isCondition ? 'Condition' : 'Action'
++            } — ${e.instructionSentence}`
++        );
++        sections.push(
++          '## Events with invalid parameters\n' + lines.join('\n')
++        );
++      }
++
++      // Native (C++) per-scene diagnostics.
++      mapFor(0, wholeProjectDiagnosticReport.count(), index => {
++        const diagnosticReport = wholeProjectDiagnosticReport.get(index);
++        if (diagnosticReport.count() === 0) return;
++
++        const missingSceneVariables = new Set<string>();
++        const unknownObjects = new Set<string>();
++        const mismatchedTypeObjects = new Set<string>();
++        const missingObjectVariablesByObject = new Map<string, Set<string>>();
++        const missingBehaviorsByObjects = new Map<string, Set<string>>();
++        mapFor(0, diagnosticReport.count(), i => {
++          const projectDiagnostic = diagnosticReport.get(i);
++          const objectName = projectDiagnostic.getObjectName();
++          const type = projectDiagnostic.getType();
++          switch (type) {
++            case gd.ProjectDiagnostic.UndeclaredVariable:
++              if (objectName.length === 0) {
++                missingSceneVariables.add(projectDiagnostic.getActualValue());
++              } else {
++                addFor(
++                  missingObjectVariablesByObject,
++                  objectName,
++                  projectDiagnostic.getActualValue()
++                );
++              }
++              break;
++            case gd.ProjectDiagnostic.MissingBehavior: {
++              const behaviorType = projectDiagnostic.getExpectedValue();
++              const isCapability = gd.MetadataProvider.getBehaviorMetadata(
++                gd.JsPlatform.get(),
++                behaviorType
++              ).isHidden();
++              if (isCapability) {
++                mismatchedTypeObjects.add(objectName);
++              } else {
++                addFor(missingBehaviorsByObjects, objectName, behaviorType);
++              }
++              break;
++            }
++            case gd.ProjectDiagnostic.UnknownObject:
++              unknownObjects.add(projectDiagnostic.getActualValue());
++              break;
++            case gd.ProjectDiagnostic.MismatchedObjectType:
++              mismatchedTypeObjects.add(objectName);
++              break;
++            default:
++              break;
++          }
++        });
++        for (const unknownObjectName of unknownObjects) {
++          mismatchedTypeObjects.delete(unknownObjectName);
++        }
++
++        const lines = [];
++        if (unknownObjects.size > 0)
++          lines.push(`- Missing objects: ${[...unknownObjects].join(', ')}`);
++        if (mismatchedTypeObjects.size > 0)
++          lines.push(
++            `- Objects used with the wrong actions/conditions: ${[
++              ...mismatchedTypeObjects,
++            ].join(', ')}`
++          );
++        if (missingSceneVariables.size > 0)
++          lines.push(
++            `- Missing scene variables: ${[...missingSceneVariables].join(', ')}`
++          );
++        for (const [
++          objectName,
++          missingVariables,
++        ] of missingObjectVariablesByObject.entries()) {
++          lines.push(
++            `- Missing variables for object "${objectName}": ${[
++              ...missingVariables,
++            ].join(', ')}`
++          );
++        }
++        for (const [
++          objectName,
++          missingBehaviors,
++        ] of missingBehaviorsByObjects.entries()) {
++          const behaviorNames = [...missingBehaviors].map(behaviorType =>
++            gd.MetadataProvider.getBehaviorMetadata(
++              gd.JsPlatform.get(),
++              behaviorType
++            ).getFullName()
++          );
++          lines.push(
++            `- Missing behaviors for object "${objectName}": ${behaviorNames.join(
++              ', '
++            )}`
++          );
++        }
++        if (lines.length > 0)
++          sections.push(
++            `## Scene "${diagnosticReport.getSceneName()}"\n` + lines.join('\n')
++          );
++      });
++
++      const userRequest = [
++        'The diagnostic report for my GDevelop game found the problems below. ' +
++          'Please fix them by editing the project — create any missing objects, ' +
++          'behaviors and variables, correct the invalid event parameters, and ' +
++          'replace or remove instructions that no longer exist. Make the changes ' +
++          'directly, then briefly summarize what you fixed.',
++        ...sections,
++      ].join('\n\n');
++
++      onFixWithAi(userRequest);
++    },
++    // renderMissingInstructionName is a stable inline helper recreated each render;
++    // it only reads its argument, so it is safe to omit from the deps.
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++    [onFixWithAi, groupedErrors, validationErrors, wholeProjectDiagnosticReport]
++  );
++
+   const hasNativeReport = wholeProjectDiagnosticReport.hasAnyIssue();
+   const hasAnyIssue = hasNativeReport || hasValidationErrors;
+ 
+@@ -507,13 +676,21 @@ export default function DiagnosticReportDialog({
+       id="diagnostic-report-dialog"
+       title={<Trans>Diagnostic report</Trans>}
+       actions={[
+-        <DialogPrimaryButton
++        <FlatButton
+           id="close-button"
+           key="close"
+           label={<Trans>Close</Trans>}
+-          primary={true}
+           onClick={onClose}
+         />,
++        hasAnyIssue && onFixWithAi ? (
++          <DialogPrimaryButton
++            id="fix-with-ai-button"
++            key="fix-with-ai"
++            label={<Trans>Fix with AI</Trans>}
++            primary
++            onClick={handleFixWithAi}
++          />
++        ) : null,
+       ]}
+       secondaryActions={[
+         <Toggle
 diff --git a/newIDE/app/src/MainFrame/EditorContainers/HomePage/PlaySection/UseGamesPlatformFrame.js b/newIDE/app/src/MainFrame/EditorContainers/HomePage/PlaySection/UseGamesPlatformFrame.js
 index 71a149c..8e5f97a 100644
 --- a/newIDE/app/src/MainFrame/EditorContainers/HomePage/PlaySection/UseGamesPlatformFrame.js
@@ -396,6 +711,49 @@ index 718ee2c..f0749a1 100644
  
          console.info(`Fetching all courses for userId=${userId || 'null'}.`);
  
+diff --git a/newIDE/app/src/MainFrame/index.js b/newIDE/app/src/MainFrame/index.js
+index 6783d42..84b08d9 100644
+--- a/newIDE/app/src/MainFrame/index.js
++++ b/newIDE/app/src/MainFrame/index.js
+@@ -1038,6 +1038,7 @@ const MainFrame = (props: Props): React.MixedElement => {
+         aiRequestId,
+         paneIdentifier,
+         continueProcessingFunctionCallsOnMount,
++        newRequest,
+       } = options || {};
+       const newPaneIdentifier =
+         paneIdentifier || (currentProject ? 'right' : 'center');
+@@ -1086,7 +1087,12 @@ const MainFrame = (props: Props): React.MixedElement => {
+       }).then(state => {
+         // Wait for the state to be updated before starting/opening the chat,
+         // as the editor needs to be mounted.
+-        const params = aiRequestId === undefined ? undefined : { aiRequestId };
++        const params =
++          newRequest !== undefined
++            ? { newRequest }
++            : aiRequestId === undefined
++            ? undefined
++            : { aiRequestId };
+         const openedEditor = getOpenedAskAiEditor(state.editorTabs);
+         if (!openedEditor) {
+           console.error(
+@@ -5828,6 +5834,16 @@ const MainFrame = (props: Props): React.MixedElement => {
+           project={currentProject}
+           wholeProjectDiagnosticReport={currentProject.getWholeProjectDiagnosticReport()}
+           onClose={() => setDiagnosticReportDialogOpen(false)}
++          onFixWithAi={userRequest => {
++            setDiagnosticReportDialogOpen(false);
++            openAskAi({
++              newRequest: {
++                mode: 'agent',
++                userRequest,
++                aiConfigurationPresetId: 'default',
++              },
++            });
++          }}
+           onNavigateToLayoutEvent={(layoutName, eventPath) => {
+             setPendingEventNavigation({
+               name: layoutName,
 diff --git a/newIDE/app/src/Profile/AuthenticatedUserProvider.js b/newIDE/app/src/Profile/AuthenticatedUserProvider.js
 index 3934e89..c1128a3 100644
 --- a/newIDE/app/src/Profile/AuthenticatedUserProvider.js

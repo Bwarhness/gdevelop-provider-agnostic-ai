@@ -5,9 +5,11 @@ newIDE editor. The full GDevelop source is **not** included in this repo (it's a
 [4ian/GDevelop](https://github.com/4ian/GDevelop) and carries its own trademark/license).
 Instead, this folder ships the changes so you can apply them to your own clone.
 
-There are **12 files**: 10 modified + 2 new (`LocalAiUser.js`, `LocalAiModelSelector.js`).
-Every change is inert unless `REACT_APP_LOCAL_AI=true` — without it the editor behaves
-exactly like upstream and talks to GDevelop's cloud.
+There are **15 files**: 13 modified + 2 new (`LocalAiUser.js`, `LocalAiModelSelector.js`).
+Most changes are inert unless `REACT_APP_LOCAL_AI=true` — without it the editor behaves
+exactly like upstream and talks to GDevelop's cloud. The exception is the diagnostic
+report's **"Fix with AI"** button, which is a general enhancement that works with any
+backend (it sends the project's problems to the Ask AI agent to fix).
 
 ## 1. Clone GDevelop
 
@@ -68,7 +70,10 @@ with the in-chat model picker. Remove `.env.local` to revert to GDevelop's cloud
 | `AiGeneration/AiRequestChat/index.js` | Uses `getLocalAiMode()`; renders the model picker. |
 | `AiGeneration/AiRequestChat/LocalAiModelSelector.js` *(new)* | In-chat model picker (reads `/omp-models`, writes `/config`). |
 | `AiGeneration/AskAiStandAloneForm.js` | Uses `getLocalAiMode()`. |
-| `AiGeneration/Utils.js` | Skips cloud project/version saves in local mode. |
+| `AiGeneration/Utils.js` | Skips cloud project/version saves in local mode; `OpenAskAiOptions.newRequest` (open Ask AI and auto-send a request). |
+| `AiGeneration/AskAiEditorContainer.js` | `startOrOpenChat` accepts a `newRequest` to create+send a fresh request on open. |
+| `ExportAndShare/DiagnosticReportDialog.js` | **"Fix with AI"** button: composes the diagnostics into a prompt and sends it to the agent. |
+| `MainFrame/index.js` | Threads `newRequest` through `openAskAi`; passes `onFixWithAi` to the diagnostic report. |
 | `MainFrame/EditorContainers/HomePage/PlaySection/UseGamesPlatformFrame.js` | Skips the games-platform token fetch in local mode. |
 | `MainFrame/EditorContainers/HomePage/UseCourses.js` | Skips the course-recommendation fetch in local mode. |
 | `config-overrides.js` | Disables the dev runtime-error overlay so the editor stays clean. |
